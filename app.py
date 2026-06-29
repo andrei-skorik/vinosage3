@@ -47,6 +47,7 @@ _DEFAULTS: dict = {
     "scroll_to_bottom": False,
     "auth": None,
     "age_confirmed": False,
+    "anon_profile": {},
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -56,6 +57,7 @@ for _k, _v in _DEFAULTS.items():
 from src.agent import run_agent  # noqa: E402
 from src.config import CHAT_MODELS  # noqa: E402
 from src.logging_db import log_query, log_token_usage, log_tool_calls  # noqa: E402
+from src.preferences import get_preferences  # noqa: E402
 from src.rag import retrieve  # noqa: E402
 from src.ratelimit import check_cost_cap, check_rate_limit  # noqa: E402
 from src.ui.admin import render_admin  # noqa: E402
@@ -291,6 +293,16 @@ def main() -> None:
                     step2 = st.empty()
                     step2.caption(f"⏳ {t('step_think', locale)}…")
 
+                    # Resolve this turn's taste profile: authed read (RLS) for
+                    # logged-in users, the in-session dict for anonymous ones
+                    # (anon profiles are never persisted — SPEC §5.3).
+                    auth = _current_user()
+                    user_id = auth.get("user_id") if auth else None
+                    if auth:
+                        profile = get_preferences(auth["access_token"], auth["refresh_token"], user_id)
+                    else:
+                        profile = st.session_state.anon_profile
+
                     result = run_agent(
                         query=prompt,
                         model=model,
@@ -298,8 +310,16 @@ def main() -> None:
                         history=_agent_history(st.session_state.messages[:-1], current_query=prompt),
                         precomputed_rag=rag_results,
                         precomputed_filter=filter_used,
+                        user_id=user_id,
+                        profile=profile,
+                        session_id=session_id,
                     )
                     step2.caption(f"✓ {t('step_think', locale)}")
+
+                    # Logged-in users' signals are already upserted to the DB by
+                    # extract_preferences; anonymous signals only ever live here.
+                    if not auth and result.extracted_preferences:
+                        st.session_state.anon_profile = result.extracted_preferences
 
                     final_state = "complete" if result.status == "ok" else "error"
                     status.update(

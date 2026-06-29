@@ -125,6 +125,7 @@ class AgentResult:
     model_used:      str = DEFAULT_MODEL
     status:          str = "ok"
     error_code:      str | None = None
+    extracted_preferences: dict[str, Any] = field(default_factory=dict)
 
 
 def _parse_tool_message_content(raw: Any) -> Any:
@@ -318,4 +319,5 @@ def run_agent(
         model_used=final_state.get("model_used", model),
         status=final_state.get("status", "ok"),
         error_code=final_state.get("error_code"),
+        extracted_preferences=final_state.get("extracted_preferences") or {},
     )

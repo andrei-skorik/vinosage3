@@ -126,13 +126,15 @@ def guard_node(state: AgentState) -> dict[str, Any]:
 
 
 def load_preferences_node(state: AgentState) -> dict[str, Any]:
-    """Read user_preferences (logged-in) or session profile (anon) into state.
+    """Load this turn's taste profile into state.
 
-    The actual Supabase read/upsert/delete lives in src/preferences.py
-    (build-order Step 4, not yet built). Until then this node passes through
-    whatever profile the caller already resolved — {} for anonymous/new
-    users — so the graph shape matches SPEC §5.1 without writing or reading
-    unvalidated data ahead of schedule.
+    The actual Supabase read (src/preferences.get_preferences) needs the
+    user's own session tokens to satisfy RLS (auth.uid() = user_id) — those
+    tokens live in Streamlit's session state, not in this graph's state, so
+    app.py reads the profile and hands it to run_agent(profile=...) before
+    the graph runs. Anonymous users pass their session-only dict the same
+    way. This node is therefore a pass-through by design, not a stub: {} for
+    anonymous/new users, the already-resolved row otherwise.
     """
     return {"profile": state.get("profile") or {}}
 
@@ -265,14 +267,25 @@ def agent_node(state: AgentState) -> dict[str, Any]:
 
 
 def extract_preferences_node(state: AgentState) -> dict[str, Any]:
-    """Detect explicit taste signals in the finished turn and upsert them.
+    """Detect explicit taste signals in this turn and persist them.
 
-    The structured-signal detection + user_preferences upsert lands in
-    build-order Step 4 alongside src/preferences.py. Until then this is a
-    documented no-op so the graph shape matches SPEC §5.1 without persisting
-    unvalidated guesses about a user's taste.
+    Only explicit, confident statements count (SPEC §5.3) — see
+    src/preferences.detect_preference_signals. Logged-in users get an
+    immediate service-role upsert (swallows failures, never blocks the
+    chat reply); anonymous users get the detected signals back in
+    extracted_preferences without any DB write — app.py merges those into
+    the session-only profile dict, never the database (US-002 AC).
     """
-    return {"extracted_preferences": {}}
+    from src.preferences import detect_preference_signals, upsert_preferences
+
+    signals = detect_preference_signals(state.get("query") or "", state.get("profile"))
+    if not signals:
+        return {"extracted_preferences": {}}
+
+    user_id = state.get("user_id")
+    if user_id:
+        upsert_preferences(user_id, **signals)  # swallows internally; failure never blocks chat
+    return {"extracted_preferences": signals}
 
 
 def _route_after_guard(state: AgentState) -> str:
