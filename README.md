@@ -2,16 +2,21 @@
 
 ## What this is
 
-A domain-specialised RAG chatbot for an online wine shop.
-Recommends, compares, and budgets wines from a live 1289-item catalog
-using a LangChain tool-calling agent with 5 specialised tools and
-multi-query RAG with RRF fusion.
+A personal AI wine mentor for an online wine shop.
+Teaches wine concepts, remembers your taste across sessions, and recommends
+bottles from a live 1289-item catalog — grounded in catalog evidence,
+never invented.
+
+Built on a hand-wired LangGraph `StateGraph` with 7 specialised tools,
+multi-query RAG with RRF fusion, per-user taste memory in Supabase,
+and 👍/👎 feedback that improves recommendations over time.
 
 Supports 4 languages (EN / DE / RU / FI), includes rate limiting,
-daily cost caps, and full observability logging to Supabase.
+daily cost caps, prompt-injection guard, LangSmith observability,
+and full logging to Supabase.
 
 Stack: Python · Streamlit · LangChain + LangGraph · Supabase pgvector ·
-OpenRouter · Pydantic v2 · rapidfuzz · pytest
+OpenRouter · Pydantic v2 · rapidfuzz · pytest · LangSmith
 
 ![VinoSage chat screenshot](screenshots/chat.png)
 
