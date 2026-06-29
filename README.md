@@ -15,6 +15,96 @@ OpenRouter · Pydantic v2 · rapidfuzz · pytest
 
 ![VinoSage chat screenshot](screenshots/chat.png)
 
+## What's new in v2.0
+
+v1.0 was a stateless recommender — every conversation started from zero.
+v2.0 turns it into a **personal wine mentor** that teaches, remembers, and improves.
+
+| Capability | Detail |
+|------------|--------|
+| **LangGraph `StateGraph`** | Hand-wired 6-node graph replaces the black-box `create_agent`: `guard → load_preferences → router → retrieve → agent ↔ tools → extract_preferences`. Conditional retrieval — educational queries skip the catalog entirely. |
+| **Long-term taste memory** | Per-user taste profile persisted in Supabase (`user_preferences`): preferred/disliked types, grapes, countries, styles, price range, expertise level. Survives restarts and devices. Anonymous users get a session-only profile. |
+| **Personalised recommendations** | New `recommend_for_me` tool reads the stored profile and filters the catalog DataFrame by preference dimensions, ranks by overlap count, returns only in-stock wines. Non-catalog preferences are surfaced honestly, never invented. |
+| **Wine education** | New `explain_wine_concept` tool fetches plain-language explanations from Wikipedia (no API key). Educational turns skip catalog retrieval; the agent never names catalog wines when answering a concept question. |
+| **👍 / 👎 feedback loop** | Ratings on recommended wines fold back into the taste profile: 👍 adds type/grape/style to `preferred_*`; 👎 adds grape/style to `disliked_*` only if not already preferred. This is conditioning, not model training. |
+| **Prompt- and memory-injection guard** | First graph node detects and blocks injection attempts before the LLM is called. Blocked attempts are logged to `security_events` with severity and matched rule. |
+| **Dev / user separation** | Users see a *Quick / In-depth* speed toggle — no model names. Developers unlock a hidden admin panel with the real model registry, temperature slider, per-tool enable/disable, and a read-only system-prompt view. |
+| **LangSmith observability** | Auto-instrumented via env vars (`LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `LANGSMITH_ENDPOINT`). Degrades gracefully when the key is absent — app runs identically without it. |
+| **95 unit tests** | +26 new tests covering all v2.0 additions. All 11 original anti-hallucination tests (`test_pair_with_food.py`) pass unchanged — grounding guarantees from v1.0 are fully preserved. |
+
+### v2.0 architecture
+
+```
+User (Streamlit UI)
+       │
+       ▼
+  app.py  ──► rate_limit.py ──► guard: 10 req/min, €1/day cap
+       │
+       ▼
+  graph.py  ──► LangGraph StateGraph
+       │              │
+       │         guard_node          (injection detection → security_events)
+       │              │
+       │         load_preferences    (reads user_preferences from Supabase)
+       │              │
+       │         router              (educate / recommend / compare / general)
+       │              │
+       │         retrieve (conditional — skipped for educate route)
+       │              │
+       │         agent_node  ◄──────────────────────────────────────────┐
+       │              │                                                  │
+       │              ├── filter_wines        (hard catalog constraints) │
+       │              ├── pair_with_food      (dish → catalog pairings)  │
+       │              ├── calculate_budget    (N bottles / €budget)      │
+       │              ├── compare_wines       (fuzzy name match)         │
+       │              ├── wine_stats          (aggregates)               │
+       │              ├── explain_wine_concept (Wikipedia REST, NEW)     │
+       │              └── recommend_for_me   (profile-conditioned, NEW) ─┘
+       │              │
+       │         extract_preferences  (detects taste signals → upserts profile)
+       │
+       ▼
+  Supabase pgvector  ──► match_wines() RPC (HNSW cosine similarity)
+       │
+       ▼
+  logging_db.py  ──► query_logs / tool_call_logs / token_usage /
+                     recommendation_feedback / security_events
+```
+
+### New environment variables (v2.0, all optional)
+
+| Variable | Description |
+|----------|-------------|
+| `LANGSMITH_TRACING` | Set `true` to enable LangSmith tracing |
+| `LANGSMITH_API_KEY` | LangSmith API key (from smith.langchain.com) |
+| `LANGSMITH_PROJECT` | Project name in LangSmith (default: `vinosage`) |
+| `LANGSMITH_ENDPOINT` | Required for EU-region accounts: `https://eu.api.smith.langchain.com` |
+
+### New database tables (v2.0)
+
+Apply `sql/06` – `sql/09` after the existing `sql/01` – `sql/05`.
+Run `sql/09_tool_logs_extend.sql` **first** (widens a CHECK constraint before
+the new tools log anything).
+
+| File | Creates |
+|------|---------|
+| `sql/06_preferences.sql` | `user_preferences` — per-user taste profile |
+| `sql/07_security_events.sql` | `security_events` — injection audit log |
+| `sql/08_feedback.sql` | `recommendation_feedback` — 👍/👎 per wine per query |
+| `sql/09_tool_logs_extend.sql` | Widens `tool_call_logs.tool_name` CHECK for new tools |
+
+### Key design decisions added in v2.0
+
+| Decision | Reason |
+|----------|--------|
+| Preferences shape query/ranking only | Profile never produces a non-catalog wine — grounding guarantee extended to the memory layer |
+| `recommend_for_me` built via factory closure | LLM never passes user identity; profile is pre-bound at request time |
+| `extract_preferences` writes only on explicit signals | Casual wine mentions don't pollute the profile; sentence-boundary guard prevents trailing questions from being misread as preferences |
+| Feedback fold excludes `type` from dislikes | One 👎 on a Malbec doesn't make the agent avoid all reds |
+| LangSmith via env vars only, no `_require` | Tracing degrades gracefully — a missing key never crashes the app |
+| `ragas` in `requirements-eval.txt`, not `requirements.txt` | Requires MS C++ Build Tools on Windows; optional eval-only dependency |
+
+
 ---
 
 ## Architecture
