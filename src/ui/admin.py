@@ -1,4 +1,4 @@
-"""Admin panel — catalog stats, CSV import, audit log."""
+"""Admin panel — dev settings, catalog stats, CSV import, audit log."""
 from __future__ import annotations
 
 import io
@@ -6,10 +6,22 @@ import io
 import streamlit as st
 
 from src.catalog import get_service_db, invalidate_cache
+from src.config import CHAT_MODELS, DEFAULT_MODEL, LANGSMITH_ENABLED, LANGSMITH_PROJECT
 from src.i18n import t
+
+# Mirrors the CHECK constraint in sql/09_tool_logs_extend.sql — the 5
+# original tools + the 2 added in v2.0. Default: all enabled.
+_ALL_TOOLS = (
+    "filter_wines", "pair_with_food", "calculate_budget", "compare_wines", "wine_stats",
+    "explain_wine_concept", "recommend_for_me",
+)
 
 
 def render_admin(locale: str) -> None:
+    st.subheader(t("admin_dev_header", locale))
+    _render_dev_settings(locale)
+    st.divider()
+
     st.subheader(t("admin_stats_header", locale))
     _render_stats(locale)
     st.divider()
@@ -18,12 +30,66 @@ def render_admin(locale: str) -> None:
     _render_analytics(locale)
     st.divider()
 
+    st.subheader(t("admin_users_header", locale))
+    _render_user_stats(locale)
+    st.divider()
+
+    st.subheader(t("admin_security_header", locale))
+    _render_security_events(locale)
+    st.divider()
+
     st.subheader(t("admin_import_header", locale))
     _render_import(locale)
     st.divider()
 
     st.subheader(t("admin_audit_header", locale))
     _render_audit(locale)
+
+
+def _render_dev_settings(locale: str) -> None:
+    """Real model/temperature/tool-toggle controls + read-only system prompt.
+
+    Everything here is dev-only (US-007): no model name, temperature, or
+    system prompt is ever shown outside this password-gated tab. Defaults
+    (DEFAULT_MODEL, 0.2, all tools enabled) match the end-user path exactly,
+    so simply unlocking the tab changes nothing until an admin moves a
+    control.
+    """
+    model_list = list(CHAT_MODELS.keys())
+    current = st.session_state.get("dev_model_override") or DEFAULT_MODEL
+    idx = model_list.index(current) if current in model_list else 0
+    st.session_state.dev_model_override = st.selectbox(
+        t("admin_model_label", locale), options=model_list, index=idx, key="dev_model_select",
+    )
+
+    st.session_state.dev_temperature = st.slider(
+        t("admin_temp_label", locale),
+        min_value=0.0, max_value=1.0,
+        value=float(st.session_state.get("dev_temperature", 0.2)),
+        step=0.05,
+        key="dev_temp_slider",
+    )
+
+    st.markdown(f"**{t('admin_tools_label', locale)}**")
+    enabled_map: dict[str, bool] = dict(st.session_state.get("dev_tools_enabled", {}))
+    cols = st.columns(2)
+    for i, name in enumerate(_ALL_TOOLS):
+        with cols[i % 2]:
+            enabled_map[name] = st.checkbox(
+                name, value=enabled_map.get(name, True), key=f"dev_tool_{name}"
+            )
+    st.session_state.dev_tools_enabled = enabled_map
+
+    st.markdown(f"**{t('admin_system_prompt_label', locale)}**")
+    from src.agent import _LOCALE_NAMES, SYSTEM_PROMPT_TEMPLATE
+    locale_name = _LOCALE_NAMES.get(locale, "English")
+    st.code(SYSTEM_PROMPT_TEMPLATE.format(locale_name=locale_name), language=None)
+
+    # Diagnostic only — never required, never blocks the app (SPEC §3.5).
+    if LANGSMITH_ENABLED:
+        st.caption(f"🟢 LangSmith tracing: ON · project `{LANGSMITH_PROJECT or 'default'}`")
+    else:
+        st.caption("⚪ LangSmith tracing: OFF (no LANGSMITH_API_KEY / LANGSMITH_TRACING set)")
 
 
 def _render_stats(locale: str) -> None:
@@ -111,6 +177,105 @@ def _render_analytics(locale: str) -> None:
 
     except Exception as exc:
         st.error(f"Analytics unavailable: {exc}")
+
+
+def _render_user_stats(locale: str) -> None:
+    """Per-user totals computed on read (Block 2: no new aggregates table) —
+    same batched-join pattern as _render_analytics, restricted to non-null
+    user_id rows."""
+    try:
+        import pandas as pd
+        db = get_service_db()
+
+        ql = (
+            db.table("query_logs")
+            .select("id, user_id, created_at")
+            .order("created_at", desc=True)
+            .limit(_ANALYTICS_WINDOW)
+            .execute()
+        )
+        ql_df = pd.DataFrame(ql.data) if ql.data else pd.DataFrame(columns=["id", "user_id", "created_at"])
+        ql_df = ql_df[ql_df["user_id"].notna()]
+        if ql_df.empty:
+            st.caption(t("analytics_no_data", locale))
+            return
+
+        ids = ql_df["id"].tolist()
+        tu_rows: list[dict] = []
+        for i in range(0, len(ids), _BATCH_SIZE):
+            batch = ids[i : i + _BATCH_SIZE]
+            tu = (
+                db.table("token_usage")
+                .select("query_id, input_tokens, output_tokens, cost_eur_micros")
+                .in_("query_id", batch)
+                .execute()
+            )
+            tu_rows.extend(tu.data)
+        tu_df = pd.DataFrame(tu_rows) if tu_rows else pd.DataFrame(
+            columns=["query_id", "input_tokens", "output_tokens", "cost_eur_micros"]
+        )
+
+        fb = db.table("recommendation_feedback").select("user_id, rating").execute()
+        fb_df = pd.DataFrame(fb.data) if fb.data else pd.DataFrame(columns=["user_id", "rating"])
+        fb_df = fb_df[fb_df["user_id"].notna()]
+
+        stats = ql_df.groupby("user_id").agg(
+            query_count=("id", "count"),
+            last_active=("created_at", "max"),
+        ).reset_index()
+
+        merged = tu_df.merge(ql_df[["id", "user_id"]], left_on="query_id", right_on="id", how="left")
+        merged["total_tokens"] = merged["input_tokens"].fillna(0) + merged["output_tokens"].fillna(0)
+        tok_cost = merged.groupby("user_id").agg(
+            total_tokens=("total_tokens", "sum"),
+            total_cost_micros=("cost_eur_micros", "sum"),
+        ).reset_index()
+        stats = stats.merge(tok_cost, on="user_id", how="left")
+
+        if not fb_df.empty:
+            fb_counts = fb_df.groupby(["user_id", "rating"]).size().unstack(fill_value=0).reset_index()
+            for col in ("up", "down"):
+                if col not in fb_counts.columns:
+                    fb_counts[col] = 0
+            fb_counts = fb_counts.rename(columns={"up": "feedback_up", "down": "feedback_down"})
+            stats = stats.merge(fb_counts[["user_id", "feedback_up", "feedback_down"]], on="user_id", how="left")
+
+        for col in ("total_tokens", "total_cost_micros", "feedback_up", "feedback_down"):
+            if col not in stats.columns:
+                stats[col] = 0
+        stats[["total_tokens", "total_cost_micros", "feedback_up", "feedback_down"]] = (
+            stats[["total_tokens", "total_cost_micros", "feedback_up", "feedback_down"]].fillna(0)
+        )
+        stats["total_cost_eur"] = stats["total_cost_micros"] / 1_000_000
+
+        st.dataframe(
+            stats[["user_id", "query_count", "total_tokens", "total_cost_eur",
+                   "feedback_up", "feedback_down", "last_active"]],
+            use_container_width=True,
+        )
+    except Exception as exc:
+        st.error(f"Per-user stats unavailable: {exc}")
+
+
+def _render_security_events(locale: str) -> None:
+    try:
+        import pandas as pd
+        db = get_service_db()
+        result = (
+            db.table("security_events")
+            .select("created_at, event_type, severity, action_taken, matched_rule, user_query")
+            .order("created_at", desc=True)
+            .limit(30)
+            .execute()
+        )
+        if not result.data:
+            st.caption(t("admin_security_empty", locale))
+            return
+        df = pd.DataFrame(result.data)
+        df["user_query"] = df["user_query"].astype(str).str.slice(0, 120)
+        st.dataframe(df, use_container_width=True)
+    except Exception as exc:
+        st.error(f"Security events unavailable: {exc}")
 
 
 def _render_import(locale: str) -> None:

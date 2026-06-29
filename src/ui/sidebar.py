@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from src.catalog import get_active_wines_df
-from src.config import ADMIN_PASSWORD, CHAT_MODELS, DEFAULT_LOCALE, DEFAULT_MODEL
+from src.config import ADMIN_PASSWORD, DEFAULT_LOCALE
 from src.i18n import t
 from src.preferences import EMPTY_PROFILE, delete_preferences, get_preferences, upsert_preferences
 from src.ui.auth_view import render_auth_forms, render_history_view, render_profile_widget
@@ -195,20 +195,24 @@ def render_sidebar() -> None:
 
         st.divider()
 
-        # Model selector
-        st.markdown(f"**{t('model_label', locale)}**")
-        model_list = list(CHAT_MODELS.keys())
-        current_model = st.session_state.get("model", DEFAULT_MODEL)
-        model_idx = model_list.index(current_model) if current_model in model_list else 0
-        selected_model = st.selectbox(
-            label=t("model_label", locale),
-            options=model_list,
-            index=model_idx,
+        # Answer speed — the only model choice end users ever see (SPEC §5.6).
+        # Real model names/temperature live in the admin dev panel only; a dev
+        # override (if set) takes precedence regardless of this radio's value.
+        st.markdown(f"**{t('answer_mode_label', locale)}**")
+        _MODE_OPTIONS = ["quick", "indepth"]
+        current_mode = st.session_state.get("answer_mode", "quick")
+        mode_idx = _MODE_OPTIONS.index(current_mode) if current_mode in _MODE_OPTIONS else 0
+        selected_mode = st.radio(
+            label=t("answer_mode_label", locale),
+            options=_MODE_OPTIONS,
+            format_func=lambda m: t(f"answer_mode_{m}", locale),
+            index=mode_idx,
+            horizontal=True,
             label_visibility="collapsed",
-            key="model_select",
+            key="answer_mode_radio",
         )
-        if selected_model != st.session_state.get("model"):
-            st.session_state.model = selected_model
+        if selected_mode != st.session_state.get("answer_mode"):
+            st.session_state.answer_mode = selected_mode
 
         st.divider()
 

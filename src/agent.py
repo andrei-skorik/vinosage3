@@ -277,6 +277,8 @@ def run_agent(
     user_id: str | None = None,
     profile: dict[str, Any] | None = None,
     session_id: str | None = None,
+    temperature: float = 0.2,
+    disabled_tools: list[str] | None = None,
 ) -> AgentResult:
     """Run the LangGraph turn pipeline and return a structured result.
 
@@ -285,6 +287,9 @@ def run_agent(
     (<->tools, with the retry->fallback loop) -> extract_preferences, and maps
     the final state back into AgentResult. Imported lazily to avoid a circular
     import (src.graph imports TOOLS/_build_messages/etc. from this module).
+
+    temperature/disabled_tools default to the end-user path (0.2, none
+    disabled) — only the admin dev panel ever passes anything else (SPEC §5.6/§4.4).
     """
     if locale not in SUPPORTED_LOCALES:
         locale = DEFAULT_LOCALE
@@ -305,6 +310,8 @@ def run_agent(
         user_id=user_id,
         profile=profile or {},
         session_id=session_id or "unknown",
+        temperature=temperature,
+        disabled_tools=disabled_tools or [],
     )
 
     latency_ms = int((time.monotonic() - t0) * 1000)

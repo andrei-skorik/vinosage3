@@ -6,7 +6,7 @@ import uuid
 import streamlit as st
 import streamlit.components.v1 as components
 
-from src.config import DEFAULT_LOCALE, DEFAULT_MODEL
+from src.config import DEFAULT_LOCALE
 from src.i18n import t
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
@@ -36,7 +36,10 @@ st.markdown(
 _DEFAULTS: dict = {
     "messages": [],
     "locale": DEFAULT_LOCALE,
-    "model": DEFAULT_MODEL,
+    "answer_mode": "quick",
+    "dev_model_override": None,
+    "dev_temperature": 0.2,
+    "dev_tools_enabled": {},
     "session_id": str(uuid.uuid4()),
     "session_tokens_in": 0,
     "session_tokens_out": 0,
@@ -55,7 +58,7 @@ for _k, _v in _DEFAULTS.items():
 
 # ── Imports deferred so page_config executes before any st call ───────────────
 from src.agent import run_agent  # noqa: E402
-from src.config import CHAT_MODELS  # noqa: E402
+from src.config import CHAT_MODELS, INDEPTH_MODEL, QUICK_MODEL  # noqa: E402
 from src.logging_db import log_query, log_token_usage, log_tool_calls  # noqa: E402
 from src.preferences import get_preferences  # noqa: E402
 from src.rag import retrieve  # noqa: E402
@@ -201,8 +204,19 @@ def main() -> None:
     render_sidebar()
 
     locale     = st.session_state.locale
-    model      = st.session_state.model
     session_id = st.session_state.session_id
+
+    # Quick/In-depth is the only model choice end users ever see (SPEC §5.6).
+    # A dev panel selection (admin-only) overrides it for the rest of the
+    # session; the override lives in its own session key so it survives
+    # reruns regardless of render order between the sidebar and admin tab.
+    model = st.session_state.dev_model_override or (
+        QUICK_MODEL if st.session_state.answer_mode == "quick" else INDEPTH_MODEL
+    )
+    temperature = st.session_state.dev_temperature  # 0.2 unless an admin changed it
+    disabled_tools = [
+        name for name, enabled in st.session_state.dev_tools_enabled.items() if not enabled
+    ]
 
     # Age gate blocks all chat functionality until confirmed — registering
     # with the mandatory 18+ checkbox also satisfies it (see auth_view.py).
@@ -313,6 +327,8 @@ def main() -> None:
                         user_id=user_id,
                         profile=profile,
                         session_id=session_id,
+                        temperature=temperature,
+                        disabled_tools=disabled_tools,
                     )
                     step2.caption(f"✓ {t('step_think', locale)}")
 

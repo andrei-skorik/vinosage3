@@ -5,6 +5,10 @@ langchain==1.3.4
 langchain-core==1.4.2
 langchain-openai==1.2.2
 langchain-community==0.4.2
+langgraph==1.2.4
+
+# Observability (optional at runtime — see LANGSMITH_* in .env.example)
+langsmith==0.8.10
 
 # LLM provider (OpenRouter via OpenAI-compatible API)
 openai==2.36.0

@@ -37,13 +37,15 @@ log = logging.getLogger(__name__)
 
 class AgentState(TypedDict, total=False):
     # Turn input
-    query:      str
-    locale:     str
-    model:      str
-    history:    list[dict[str, Any]] | None
-    session_id: str
-    user_id:    str | None
-    profile:    dict[str, Any]
+    query:          str
+    locale:         str
+    model:          str
+    temperature:    float
+    disabled_tools: list[str]
+    history:        list[dict[str, Any]] | None
+    session_id:     str
+    user_id:        str | None
+    profile:        dict[str, Any]
 
     # Routing / retrieval
     route:       str
@@ -162,16 +164,23 @@ def retrieve_node(state: AgentState) -> dict[str, Any]:
         return {"rag_context": [], "filter_used": {}}
 
 
-def _tools_for_route(route: str, profile: dict[str, Any]) -> list:
+def _tools_for_route(route: str, profile: dict[str, Any], disabled_tools: list[str] | None = None) -> list:
     if route == "educate":
         # US-001 AC: educational turns must not trigger pair_with_food/filter_wines —
         # enforced structurally (no catalog tools available), not just by prompt wording.
-        return [explain_wine_concept]
-    if route == "recommend":
+        tools = [explain_wine_concept]
+    elif route == "recommend":
         from src.agent import TOOLS
-        return TOOLS + [build_recommend_for_me_tool(profile)]
-    from src.agent import TOOLS
-    return TOOLS
+        tools = TOOLS + [build_recommend_for_me_tool(profile)]
+    else:
+        from src.agent import TOOLS
+        tools = TOOLS
+
+    if disabled_tools:
+        # Admin dev panel per-tool toggles (SPEC §4.4) — default all enabled,
+        # never user-facing.
+        tools = [tl for tl in tools if tl.name not in disabled_tools]
+    return tools
 
 
 def agent_node(state: AgentState) -> dict[str, Any]:
@@ -183,11 +192,16 @@ def agent_node(state: AgentState) -> dict[str, Any]:
         state.get("history"),
         state.get("rag_context") or [],
     )
-    tools = _tools_for_route(state.get("route") or "general", state.get("profile") or {})
+    tools = _tools_for_route(
+        state.get("route") or "general", state.get("profile") or {}, state.get("disabled_tools")
+    )
 
     model = state.get("model") or DEFAULT_MODEL
     if model not in CHAT_MODELS:
         model = DEFAULT_MODEL
+    temperature = state.get("temperature")
+    if temperature is None:
+        temperature = 0.2  # end-user paths always default here; only the dev slider overrides
 
     tool_calls_log: list[dict[str, Any]] = []
     used_model = model
@@ -197,7 +211,7 @@ def agent_node(state: AgentState) -> dict[str, Any]:
             if attempt == 1:
                 time.sleep(2)
             used_model = m
-            llm = get_llm(m, temperature=0.2)  # temperature fixed for all end-user paths
+            llm = get_llm(m, temperature=temperature)
             agent = create_agent(llm, tools=tools)
 
             # invoke() (not stream) so each LLM call returns usage_metadata
@@ -327,12 +341,16 @@ def run_via_graph(
     user_id: str | None,
     profile: dict[str, Any],
     session_id: str,
+    temperature: float = 0.2,
+    disabled_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     """Invoke the compiled graph for one turn. Returns the final AgentState dict."""
     initial_state: AgentState = {
         "query": query,
         "model": model,
         "locale": locale,
+        "temperature": temperature,
+        "disabled_tools": disabled_tools or [],
         "history": history,
         "rag_context": rag_context,
         "filter_used": filter_used,
