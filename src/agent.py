@@ -29,6 +29,27 @@ from src.tools.wine_stats import wine_stats
 
 log = logging.getLogger(__name__)
 
+# Pairing-trigger regex (Layer 2 of triple anti-hallucination defence — identical
+# logic also lives in pair_with_food.py and app.py, deliberately independent).
+# Only text that follows one of these trigger phrases is searched for food keywords;
+# this prevents tasting-note descriptors from being mistaken for pairing claims.
+_PAIRING_TRIGGER_RE = re.compile(
+    r"\b(?:"
+    r"try\s+it\s+with|try\s+with|serve\s+with|serve\s+alongside|"
+    r"pair(?:s)?\s+(?:perfectly\s+|well\s+)?with|"
+    r"drink\s+with|goes?\s+(?:perfectly\s+|well\s+)?with|"
+    r"enjoy\s+(?:it\s+)?with|"
+    r"partner\s+(?:this\s+|it\s+)?with|partner\s+for|"
+    r"perfect\s+(?:with|for|pairing\s+for|match\s+for|accompaniment\s+(?:for|with|to))|"
+    r"excellent\s+(?:with|match\s+for)|"
+    r"delicious\s+with|fantastic\s+with|great\s+with|wonderful\s+with|lovely\s+with|"
+    r"best\s+with|perfectly\s+with|ideal\s+(?:with|for)|"
+    r"accompani(?:es|ment)\s+(?:for|to)|a\s+natural\s+match\s+for|"
+    r"stand\s+up\s+to|suited\s+to|complemented\s+by|good\s+with"
+    r")",
+    re.IGNORECASE,
+)
+
 # recommend_for_me is intentionally absent here — SPEC §3.3 requires it be
 # built per-request via build_recommend_for_me_tool(profile) once the graph
 # (Step 3) resolves the caller's taste profile, so the LLM never passes
@@ -185,33 +206,18 @@ def _build_messages(
             query_food = [w for w in re.findall(r'\b\w{4,}\b', recent.lower())
                           if w in _FOOD_KWS]
 
-        # Compound patterns for keywords that also appear as tasting-note descriptors.
-        # "chocolate dessert" (food pairing) ≠ "dark chocolate, vanilla" (flavour note).
-        # "with a chocolate cake" (pairing) ≠ "notes of chocolate cake" (tasting note).
-        _COMPOUND = {
-            "chocolate": (
-                r"\bchocolate\s+(?:pudding|puddings|dessert|desserts|cake|cakes|mousse|"
-                r"fondue|brownie|brownies|ice\s*cream|fondant|torte|tart|tarts|truffle|"
-                r"fudge|ganache|souffl[eé])\b"
-                r"|\b(?:with|for|alongside)\s+(?:a\s+)?chocolate\b(?!\s+(?:note|hint|"
-                r"flavou?r|touch|character|aroma))"
-            ),
-            "cake": (
-                r"\b(?:with|for|alongside)\s+(?:a\s+)?(?:\w+\s+){0,2}cakes?\b"
-                r"(?!-like|\s+like|\s+note|\s+notes|\s+hint|\s+flavou?rs?|\s+character|\s+aroma)"
-            ),
-        }
-
         def _has_desc_evidence(wine: RetrievedWine, food_words: list[str]) -> bool:
             raw = wine.payload.get("description")
             if not isinstance(raw, str):
                 return False
-            for fw in food_words:
-                if fw in _COMPOUND:
-                    if re.search(_COMPOUND[fw], raw):
-                        return True
-                else:
-                    if re.search(r'\b' + re.escape(fw) + r'\b', raw):
+            contexts = []
+            for m in _PAIRING_TRIGGER_RE.finditer(raw):
+                after = raw[m.end():]
+                end = re.search(r"[.!?\r\n]", after)
+                contexts.append((after[: end.start()] if end else after[:150]).lower())
+            for ctx in contexts:
+                for fw in food_words:
+                    if re.search(r"\b" + re.escape(fw) + r"\b", ctx):
                         return True
             return False
 

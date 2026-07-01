@@ -11,28 +11,29 @@ from src.catalog import get_active_wines_df
 
 _ERR = lambda code, msg: {"error": {"code": code, "message": msg}}   # noqa: E731
 
-# Compound patterns for keywords that also appear as tasting-note descriptors.
-# A simple word-boundary match would produce false positives:
-#   "dark chocolate, vanilla and spice"  → TASTING NOTE  (no match wanted)
-#   "with a chocolate dessert"           → FOOD PAIRING  (match wanted)
-# Each pattern requires the keyword to appear in a food-pairing context.
-_COMPOUND_FOOD_PATTERNS: dict[str, str] = {
-    "chocolate": (
-        # "chocolate [food]" — chocolate modifying an actual food item
-        r"\bchocolate\s+(?:pudding|puddings|dessert|desserts|cake|cakes|mousse|"
-        r"fondue|brownie|brownies|ice\s*cream|fondant|torte|tart|tarts|truffle|"
-        r"fudge|ganache|souffl[eé])\b"
-        # "with/for [a] chocolate" — chocolate itself is the dish
-        r"|\b(?:with|for|alongside)\s+(?:a\s+)?chocolate\b(?!\s+(?:note|hint|flavou?r|"
-        r"touch|character|aroma))"
-    ),
-    # "notes of chocolate cake" → TASTING NOTE  (no match)
-    # "pairs with a chocolate cake" → FOOD PAIRING  (match)
-    "cake": (
-        r"\b(?:with|for|alongside)\s+(?:a\s+)?(?:\w+\s+){0,2}cakes?\b"
-        r"(?!-like|\s+like|\s+note|\s+notes|\s+hint|\s+flavou?rs?|\s+character|\s+aroma)"
-    ),
-}
+# Pairing-trigger phrases: catalog descriptions announce food pairings using a
+# recognisable set of phrases.  Only text that follows one of these triggers is
+# eligible as a food-pairing match.  This eliminates tasting-note false positives
+# for ANY food word, including multi-word dishes like "dark chocolate":
+#   "dark chocolate and a creamy texture"  → no trigger → TASTING NOTE  (no match)
+#   "a perfect pairing for beef short ribs" → trigger → PAIRING  (match beef, not chocolate)
+#   "a natural match for dark chocolate's intensity" → trigger → PAIRING  (match chocolate ✓)
+_PAIRING_TRIGGER_RE = re.compile(
+    r"\b(?:"
+    r"try\s+it\s+with|try\s+with|serve\s+with|serve\s+alongside|"
+    r"pair(?:s)?\s+(?:perfectly\s+|well\s+)?with|"
+    r"drink\s+with|goes?\s+(?:perfectly\s+|well\s+)?with|"
+    r"enjoy\s+(?:it\s+)?with|"
+    r"partner\s+(?:this\s+|it\s+)?with|partner\s+for|"
+    r"perfect\s+(?:with|for|pairing\s+for|match\s+for|accompaniment\s+(?:for|with|to))|"
+    r"excellent\s+(?:with|match\s+for)|"
+    r"delicious\s+with|fantastic\s+with|great\s+with|wonderful\s+with|lovely\s+with|"
+    r"best\s+with|perfectly\s+with|ideal\s+(?:with|for)|"
+    r"accompani(?:es|ment)\s+(?:for|to)|a\s+natural\s+match\s+for|"
+    r"stand\s+up\s+to|suited\s+to|complemented\s+by|good\s+with"
+    r")",
+    re.IGNORECASE,
+)
 
 
 # Whitelist of actual food nouns. Only words from the dish name that appear in
@@ -70,27 +71,34 @@ def _desc_keywords(dish: str) -> list[str]:
     return list(dict.fromkeys([dish.lower()] + words))
 
 
-def _desc_mentions_food(desc, title, keywords: list[str]) -> bool:
-    """
-    Return True only if the description mentions a keyword as a food (lowercase),
-    NOT as part of a wine/product name (which would be capitalised).
+def _pairing_contexts(desc: str) -> list[str]:
+    """Extract the lowercased text after each pairing-trigger phrase.
 
-    Example: "stand up to chocolate puddings" → match (lowercase 'chocolate').
-             "the man behind The Chocolate Block" → no match ('Chocolate' is capitalised).
-
-    Handles NULL descriptions (NaN from pandas) gracefully — returns False.
+    Each slice runs to the next sentence terminator or 150 chars, whichever
+    comes first.  Returns [] for NaN / non-string descriptions (NaN guard).
     """
     if not isinstance(desc, str):
-        return False
-    for kw in keywords:
-        if kw in _COMPOUND_FOOD_PATTERNS:
-            # Use compound pattern to avoid matching tasting-note uses
-            # e.g. "dark chocolate notes" ≠ "with a chocolate dessert"
-            if re.search(_COMPOUND_FOOD_PATTERNS[kw], desc):
-                return True
-        else:
-            # Simple case-sensitive word-boundary match for other foods
-            if re.search(r'\b' + re.escape(kw) + r'\b', desc):
+        return []
+    contexts = []
+    for m in _PAIRING_TRIGGER_RE.finditer(desc):
+        after = desc[m.end():]
+        end = re.search(r"[.!?\r\n]", after)
+        contexts.append((after[: end.start()] if end else after[:150]).lower())
+    return contexts
+
+
+def _desc_mentions_food(desc, title, keywords: list[str]) -> bool:
+    """Return True only if the description contains a pairing trigger phrase
+    followed by at least one of the given keywords.
+
+    Anchoring matches to explicit pairing triggers ("try it with", "perfect with",
+    "a natural match for", etc.) prevents tasting-note descriptors
+    ("dark chocolate and a creamy texture") from being mistaken for pairing
+    recommendations.  Handles NaN / non-string descriptions gracefully.
+    """
+    for ctx in _pairing_contexts(desc):
+        for kw in keywords:
+            if re.search(r"\b" + re.escape(kw) + r"\b", ctx):
                 return True
     return False
 

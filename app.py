@@ -1,6 +1,7 @@
 """VinoSage — Streamlit entrypoint."""
 from __future__ import annotations
 
+import re
 import uuid
 
 import streamlit as st
@@ -85,37 +86,44 @@ _HIST_FOOD_KWS = {
 }
 
 
-_HISTORY_COMPOUND: dict[str, str] = {
-    "chocolate": (
-        r"\bchocolate\s+(?:pudding|puddings|dessert|desserts|cake|cakes|mousse|"
-        r"fondue|brownie|brownies|ice\s*cream|fondant|torte|tart|tarts|truffle|"
-        r"fudge|ganache|souffl[eé])\b"
-        r"|\b(?:with|for|alongside)\s+(?:a\s+)?chocolate\b(?!\s+(?:note|hint|"
-        r"flavou?r|touch|character|aroma))"
-    ),
-    "cake": (
-        r"\b(?:with|for|alongside)\s+(?:a\s+)?(?:\w+\s+){0,2}cakes?\b"
-        r"(?!-like|\s+like|\s+note|\s+notes|\s+hint|\s+flavou?rs?|\s+character|\s+aroma)"
-    ),
-}
+# Pairing-trigger regex (Layer 3 of triple anti-hallucination defence — identical
+# logic also lives in pair_with_food.py and agent.py, deliberately independent).
+_HISTORY_PAIRING_TRIGGER_RE = re.compile(
+    r"\b(?:"
+    r"try\s+it\s+with|try\s+with|serve\s+with|serve\s+alongside|"
+    r"pair(?:s)?\s+(?:perfectly\s+|well\s+)?with|"
+    r"drink\s+with|goes?\s+(?:perfectly\s+|well\s+)?with|"
+    r"enjoy\s+(?:it\s+)?with|"
+    r"partner\s+(?:this\s+|it\s+)?with|partner\s+for|"
+    r"perfect\s+(?:with|for|pairing\s+for|match\s+for|accompaniment\s+(?:for|with|to))|"
+    r"excellent\s+(?:with|match\s+for)|"
+    r"delicious\s+with|fantastic\s+with|great\s+with|wonderful\s+with|lovely\s+with|"
+    r"best\s+with|perfectly\s+with|ideal\s+(?:with|for)|"
+    r"accompani(?:es|ment)\s+(?:for|to)|a\s+natural\s+match\s+for|"
+    r"stand\s+up\s+to|suited\s+to|complemented\s+by|good\s+with"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _history_source_ok(wine, food_words: list[str]) -> bool:
     """Return True if wine has catalog pairing evidence for any of the food_words.
 
-    Uses compound patterns for keywords that appear both as tasting notes and food
-    pairings (e.g. "chocolate"): "dark chocolate notes" ≠ "with a chocolate dessert".
+    Matches only within text that follows an explicit pairing trigger phrase —
+    "dark chocolate notes" (tasting note) no longer matches a chocolate query;
+    "a natural match for dark chocolate" does.
     """
-    import re as _re
     raw = (getattr(wine, "payload", {}) or {}).get("description")
     if not isinstance(raw, str):
         return False
-    for fw in food_words:
-        if fw in _HISTORY_COMPOUND:
-            if _re.search(_HISTORY_COMPOUND[fw], raw):
-                return True
-        else:
-            if _re.search(r'\b' + _re.escape(fw) + r'\b', raw):
+    contexts = []
+    for m in _HISTORY_PAIRING_TRIGGER_RE.finditer(raw):
+        after = raw[m.end():]
+        end = re.search(r"[.!?\r\n]", after)
+        contexts.append((after[: end.start()] if end else after[:150]).lower())
+    for ctx in contexts:
+        for fw in food_words:
+            if re.search(r"\b" + re.escape(fw) + r"\b", ctx):
                 return True
     return False
 
