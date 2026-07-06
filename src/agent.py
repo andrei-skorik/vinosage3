@@ -260,12 +260,53 @@ def _build_messages(
 
 
 _FOOD_QUERY_KWS = {
+    # English
     "chocolate","cake","steak","beef","lamb","venison","pork",
     "chicken","turkey","duck","salmon","tuna","fish","seafood","lobster",
     "shrimp","shrimps","oyster","oysters","sushi","pasta","pizza","risotto",
     "mushroom","mushrooms","truffle","truffles",
     "cheese","salad","barbecue","curry","spicy","tagine","casserole","meat",
+    # German — nominative forms cover most voice-query patterns
+    "lachs","forelle","thunfisch","hecht","fisch","fleisch",
+    "rind","lamm","schwein","kalb","huhn","ente","pute",
+    "pilze","trüffel","käse","schokolade","garnele","auster","krabbe",
+    # Finnish — stem forms cover nominative + partitive (most common in questions)
+    "lohi","tonnikala","siika","hauki","kala","liha",
+    "nauta","lammas","kana","kalkkuna","ankka",
+    "sieni","tryffelit","juusto","suklaa","katkarapu","osteri",
 }
+
+# Russian food stems — prefix-matched against every word in the query.
+# One stem covers all 6 grammatical cases + plural, e.g.:
+#   "стейк" → стейк / стейка / стейку / стейком / стейке / стейки
+# Critical for voice recognition: ASR outputs inflected forms as spoken
+# ("налей к стейку" → "стейку", "сочетается со стейком" → "стейком").
+_RU_FOOD_STEMS = frozenset({
+    # Мясо
+    "стейк", "говядин", "баранин", "свинин", "ягнён", "ягнят",
+    "телятин", "оленин", "мяс",
+    # Птица
+    "куриц", "курятин", "индейк", "утк",
+    # Рыба и морепродукты
+    "лосос", "сёмг", "семг", "тунц", "форел",
+    "рыб", "морепродукт", "креветк", "устриц",
+    "краб", "кальмар", "осьминог", "гребешк",
+    # Прочее
+    "шоколад", "сыр", "паст", "пицц", "ризотт",
+    "гриб", "трюфел", "салат", "барбекю",
+    "карри", "рагу", "бургер", "суп", "десерт",
+})
+
+
+def _has_ru_food(text: str) -> bool:
+    """Return True if text contains any Russian food word in any grammatical case.
+
+    Uses prefix (stem) matching so all inflected forms are covered without
+    listing each case explicitly. Designed for voice-recognition readiness:
+    ASR returns the word as spoken, which may be any of the 6 Russian cases.
+    """
+    words = re.findall(r'\b\w{3,}\b', text.lower())
+    return any(w.startswith(stem) for w in words for stem in _RU_FOOD_STEMS)
 
 
 def _is_food_query(query: str, history: list[dict[str, Any]] | None) -> bool:
@@ -274,14 +315,17 @@ def _is_food_query(query: str, history: list[dict[str, Any]] | None) -> bool:
         return w in _FOOD_QUERY_KWS or (w.endswith("s") and len(w) > 3 and w[:-1] in _FOOD_QUERY_KWS)
 
     found = [w for w in re.findall(r'\b\w{4,}\b', query.lower()) if _in_fqkws(w)]
-    if found:
+    if found or _has_ru_food(query):
         return True
     if history:
         recent = " ".join(
             m["content"] for m in history[-6:]
             if isinstance(m.get("content"), str)
         )
-        return bool([w for w in re.findall(r'\b\w{4,}\b', recent.lower()) if _in_fqkws(w)])
+        return (
+            bool([w for w in re.findall(r'\b\w{4,}\b', recent.lower()) if _in_fqkws(w)])
+            or _has_ru_food(recent)
+        )
     return False
 
 

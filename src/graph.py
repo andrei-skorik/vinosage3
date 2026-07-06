@@ -69,12 +69,28 @@ class AgentState(TypedDict, total=False):
 
 
 _EDUCATE_PATTERNS = [
+    # English
     r"^\s*what\s+is\b", r"^\s*what'?s\b", r"^\s*who\s+is\b",
     r"\bexplain\b", r"\bdefine\b", r"\btell me about\b", r"\bdifference between\b",
+    # Russian
+    r"\bрасскажи\b", r"\bобъясни\b", r"\bчто\s+такое\b", r"\bчто\s+значит\b",
+    r"\bкакая\s+разница\b", r"\bчем\s+отличаетс",
+    # German
+    r"\bwas\s+ist\b", r"\berkläre?\b", r"\bwas\s+bedeutet\b", r"\bunterschied\s+zwischen\b",
+    # Finnish
+    r"\bmikä\s+on\b", r"\bselitä\b", r"\bmitä\s+tarkoittaa\b", r"\bero\s+välillä\b",
 ]
 _RECOMMEND_PATTERNS = [
+    # English
     r"\b(recommend|suggest)\b.{0,20}\b(me|for me|something)\b",
     r"\bwhat\s+should\s+i\s+(try|drink|buy)\b",
+    # Russian
+    r"\bпосовет\w+\b", r"\bчто\s+(мне|бы)\s+(попробовать|выпить|взять|купить)\b",
+    r"\bрекоменд\w+\s+мне\b",
+    # German
+    r"\bempfiehl\b|\bempfehle?\b|\bempfehlt\b", r"\bwas\s+soll\s+ich\s+(probieren|trinken|kaufen)\b",
+    # Finnish
+    r"\bsuosittele\b", r"\bmitä\s+(minun\s+)?pitäisi\s+(kokeilla|juoda|ostaa)\b",
 ]
 
 
