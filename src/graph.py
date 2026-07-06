@@ -72,8 +72,10 @@ _EDUCATE_PATTERNS = [
     # English
     r"^\s*what\s+is\b", r"^\s*what'?s\b", r"^\s*who\s+is\b",
     r"\bexplain\b", r"\bdefine\b", r"\btell me about\b", r"\bdifference between\b",
-    # Russian
-    r"\bрасскажи\b", r"\bобъясни\b", r"\bчто\s+такое\b", r"\bчто\s+значит\b",
+    # Russian — "расскажи" intentionally omitted: "расскажи о мальбеке" is a
+    # hybrid query (education + catalog) better served by the general route,
+    # where the LLM has both explain_wine_concept AND catalog tools available.
+    r"\bобъясни\b", r"\bчто\s+такое\b", r"\bчто\s+значит\b",
     r"\bкакая\s+разница\b", r"\bчем\s+отличаетс",
     # German
     r"\bwas\s+ist\b", r"\berkläre?\b", r"\bwas\s+bedeutet\b", r"\bunterschied\s+zwischen\b",
