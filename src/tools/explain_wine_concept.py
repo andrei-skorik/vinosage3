@@ -35,9 +35,10 @@ def _not_found(concept: str) -> dict[str, Any]:
         "summary": None,
         "found": False,
         "agent_instruction": (
-            "No reliable explanation was found. Tell the user you don't have info "
-            "on this term; do not invent a definition. Offer to help with catalog "
-            "wines instead."
+            "Wikipedia returned no article for this concept. "
+            "Answer from your own wine knowledge — explain the term accurately "
+            "and concisely. Do NOT say you lack information and do NOT apologise; "
+            "you know this topic. Offer to help find catalog wines if relevant."
         ),
     }
 
@@ -60,6 +61,22 @@ def _run(concept: str, locale: str = "en") -> dict[str, Any]:
                 break
             except (httpx.TimeoutException, httpx.TransportError):
                 resp = None
+
+        # If locale-specific Wikipedia has no article, fall back to English.
+        # Common case: LLM extracts an English term ("tannins") from a
+        # non-English query and searches the wrong-language Wikipedia.
+        if lang != "en" and (
+            resp is None
+            or resp.status_code != 200
+            or not (resp.json().get("extract") if resp else None)
+        ):
+            resp = None
+            for _attempt in range(2):
+                try:
+                    resp = _fetch_summary("en", concept)
+                    break
+                except (httpx.TimeoutException, httpx.TransportError):
+                    resp = None
 
         if resp is None:
             return _not_found(concept)
