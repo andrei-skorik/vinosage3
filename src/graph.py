@@ -29,6 +29,7 @@ from src.i18n import t
 from src.llm import get_llm
 from src.logging_db import log_security_event
 from src.rag import RetrievedWine, retrieve
+from src.tools.compare_wines import compare_wines
 from src.tools.explain_wine_concept import explain_wine_concept
 from src.tools.recommend_for_me import build_recommend_for_me_tool
 
@@ -113,7 +114,7 @@ def _classify_route(query: str, history: list[dict[str, Any]] | None) -> str:
         return "recommend"
     if any(re.search(p, q) for p in _EDUCATE_PATTERNS):
         return "educate"
-    if " vs " in q or " versus " in q:
+    if " vs " in q or " versus " in q or re.search(r"^\s*compare\b", q):
         return "compare"
     return "general"
 
@@ -190,6 +191,12 @@ def _tools_for_route(route: str, profile: dict[str, Any], disabled_tools: list[s
     elif route == "recommend":
         from src.agent import TOOLS
         tools = TOOLS + [build_recommend_for_me_tool(profile)]
+    elif route == "compare":
+        # Structural enforcement: only compare_wines is available so the LLM
+        # cannot satisfy a comparison query with wine_stats or explain_wine_concept.
+        # compare_wines fuzzy-matches against catalog titles, so grape-variety
+        # names like "Malbec" resolve to real catalog wines automatically.
+        tools = [compare_wines]
     else:
         from src.agent import TOOLS
         tools = TOOLS

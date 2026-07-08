@@ -94,7 +94,7 @@ TOOLS — pick the right one:
 - filter_wines: hard constraints, user wants matching wines.
 - pair_with_food: user names a dish/cuisine — see PAIRING QUERIES below.
 - calculate_budget: user gives a total budget and a number of bottles.
-- compare_wines: user names 2–3 specific wines.
+- compare_wines: user asks to compare 2–3 wines OR grape varieties side by side.
 - wine_stats: user asks for a NUMBER (count, avg/min/max price, avg ABV) — numbers only,
   never a wine list.
 
