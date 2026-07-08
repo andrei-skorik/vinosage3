@@ -21,7 +21,7 @@ _PATTERNS: list[tuple[str, str, str, str]] = [
     (r"developer\s+mode", "prompt_injection", "medium", "developer_mode"),
     (r"you\s+are\s+now\b", "prompt_injection", "medium", "role_override"),
     # ── Prompt injection — Russian ────────────────────────────────────────────
-    (r"игнорир\w+\s+(все\s+)?(предыдущ|инструкц)", "prompt_injection", "high", "ignore_previous"),
+    (r"игнорир\w+.{0,30}(предыдущ|инструкц|всё|все)", "prompt_injection", "high", "ignore_previous"),
     (r"забудь\s+(всё|все|предыдущ)", "prompt_injection", "high", "ignore_previous"),
     (r"(покажи|раскрой|выведи).{0,20}(системн\w+\s+промпт|инструкц)", "prompt_injection", "high", "reveal_prompt"),
     (r"\b(апи[\s_-]?ключ|секретн\w+\s+ключ|переменн\w+\s+окружени)", "prompt_injection", "high", "extract_secrets"),
