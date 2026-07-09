@@ -87,6 +87,9 @@ _RECOMMEND_PATTERNS = [
     # English
     r"\b(recommend|suggest)\b.{0,20}\b(me|for me|something)\b",
     r"\bwhat\s+should\s+i\s+(try|drink|buy)\b",
+    # "What's a good/great/nice/decent/best X?" — a recommendation request,
+    # not an educational one; must appear before the broad what's educate pattern.
+    r"^\s*what'?s\s+(a\s+)?(good|great|nice|decent|best)\b",
     # Russian
     r"\bпосовет\w+\b", r"\bчто\s+(мне|бы)\s+(попробовать|выпить|взять|купить)\b",
     r"\bрекоменд\w+\s+мне\b",
@@ -112,10 +115,12 @@ def _classify_route(query: str, history: list[dict[str, Any]] | None) -> str:
     q = query.lower()
     if any(re.search(p, q) for p in _RECOMMEND_PATTERNS):
         return "recommend"
-    if any(re.search(p, q) for p in _EDUCATE_PATTERNS):
-        return "educate"
+    # compare before educate: "Compare X and Y" must not accidentally match
+    # educate patterns such as "difference between" before reaching this check.
     if " vs " in q or " versus " in q or re.search(r"^\s*compare\b", q):
         return "compare"
+    if any(re.search(p, q) for p in _EDUCATE_PATTERNS):
+        return "educate"
     return "general"
 
 
@@ -192,11 +197,12 @@ def _tools_for_route(route: str, profile: dict[str, Any], disabled_tools: list[s
         from src.agent import TOOLS
         tools = TOOLS + [build_recommend_for_me_tool(profile)]
     elif route == "compare":
-        # Structural enforcement: only compare_wines is available so the LLM
-        # cannot satisfy a comparison query with wine_stats or explain_wine_concept.
-        # compare_wines fuzzy-matches against catalog titles, so grape-variety
-        # names like "Malbec" resolve to real catalog wines automatically.
-        tools = [compare_wines]
+        # compare_wines handles side-by-side catalog comparisons (fuzzy-matches
+        # titles, so grape names like "Malbec" resolve to catalog wines).
+        # explain_wine_concept is added so that variety/style comparisons
+        # ("Compare Malbec and Merlot styles") can be answered educationally
+        # without the LLM having to ask clarifying questions.
+        tools = [compare_wines, explain_wine_concept]
     else:
         from src.agent import TOOLS
         tools = TOOLS
