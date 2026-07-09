@@ -247,16 +247,19 @@ def render_feedback_buttons(tool_calls: list[dict[str, Any]], query_id: str | No
         # once per session) collapses the stMarkdownContainer wrappers so the
         # spans never cause a layout shift.
         with col_up:
-            st.markdown(f'<span class="{mk_u}"></span>', unsafe_allow_html=True)
+            # Button first so it sits at the top of the column, aligned with
+            # the wine name label.  The anchor span follows (collapsed to zero
+            # height by the base CSS injected into <head> below).
             if st.button("👍", key=f"fb_up_{query_id}_{wine_id}", help=t("feedback_up", locale)):
                 _toggle(w, "up")
                 st.rerun()
+            st.markdown(f'<span class="{mk_u}"></span>', unsafe_allow_html=True)
 
         with col_down:
-            st.markdown(f'<span class="{mk_d}"></span>', unsafe_allow_html=True)
             if st.button("👎", key=f"fb_down_{query_id}_{wine_id}", help=t("feedback_down", locale)):
                 _toggle(w, "down")
                 st.rerun()
+            st.markdown(f'<span class="{mk_d}"></span>', unsafe_allow_html=True)
 
     color_map_json = json.dumps(color_map)
     mines_json = json.dumps(mines)
