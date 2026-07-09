@@ -152,8 +152,22 @@ def _recommended_wines_for_feedback(tool_calls: list[dict[str, Any]]) -> list[di
 
 
 def render_feedback_buttons(tool_calls: list[dict[str, Any]], query_id: str | None, locale: str) -> None:
-    """👍/👎 under each recommended wine (US-005). A failed write is silent —
-    only a successful one gets a st.toast; never an st.error (SPEC §5.4)."""
+    """👍/👎 under each recommended wine (US-005).
+
+    Buttons turn green (👍) or red (👎) when active.  Clicking the same
+    button again toggles the rating off and the button returns to white.
+    State lives in st.session_state['wine_ratings'] for the browser session.
+    A failed DB write is silent — only success triggers st.toast (SPEC §5.4).
+
+    Colouring mechanism: each button label embeds a zero-width space (U+200B)
+    followed by a unique marker string (wine_id + direction suffix) that is
+    completely invisible to the user.  A single components.v1.html() call
+    injects JS that scans all <button> elements in the parent document for this
+    hidden marker, then either sets the active colour or removes any previously
+    set inline styles (= toggle-off reset).  This avoids the layout-shift
+    problem caused by injecting hidden <span> elements via st.markdown and also
+    correctly resets buttons that were coloured in a prior render cycle.
+    """
     if not query_id:
         return
     wines = _recommended_wines_for_feedback(tool_calls)
@@ -162,33 +176,119 @@ def render_feedback_buttons(tool_calls: list[dict[str, Any]], query_id: str | No
 
     from src.logging_db import log_feedback
     from src.preferences import fold_feedback
+    import streamlit.components.v1 as components
 
     session_id = st.session_state.get("session_id", "")
     auth = st.session_state.get("auth")
     user_id = auth.get("user_id") if auth else None
 
-    def _rate(wine: dict[str, Any], rating: str) -> None:
+    if "wine_ratings" not in st.session_state:
+        st.session_state["wine_ratings"] = {}
+    ratings: dict[str, str | None] = st.session_state["wine_ratings"]
+
+    def _toggle(wine: dict[str, Any], direction: str) -> None:
+        wine_id = str(wine.get("wine_id", ""))
+        if ratings.get(wine_id) == direction:
+            ratings[wine_id] = None
+            return
+        ratings[wine_id] = direction
         ok = log_feedback(
             session_id=session_id,
             query_id=query_id,
             wine_id=wine.get("wine_id"),
             wine_title=wine.get("title"),
-            rating=rating,
+            rating=direction,
             user_id=user_id,
         )
         if ok:
             if user_id:
-                fold_feedback(user_id, wine, rating)
+                fold_feedback(user_id, wine, direction)
             st.toast(t("feedback_saved", locale))
 
+    # color_map: active marker → CSS colour (absent = reset to default).
+    # mines:     ALL markers for THIS message's wines — scopes the JS so it
+    #            never touches buttons belonging to a different message.
+    color_map: dict[str, str] = {}
+    mines: dict[str, bool] = {}
+
     for w in wines:
-        wine_id = w.get("wine_id")
+        wine_id = str(w.get("wine_id", ""))
+        current = ratings.get(wine_id)
+        safe = wine_id.replace("-", "")      # 32 hex chars; valid CSS class
+        mk_u, mk_d = "fbm" + safe + "u", "fbm" + safe + "d"
+        mines[mk_u] = True
+        mines[mk_d] = True
+
+        if current == "up":
+            color_map[mk_u] = "#28a745"
+        elif current == "down":
+            color_map[mk_d] = "#dc3545"
+
         col_label, col_up, col_down = st.columns([6, 1, 1])
         col_label.caption(w.get("title", ""))
-        if col_up.button("👍", key=f"fb_up_{query_id}_{wine_id}", help=t("feedback_up", locale)):
-            _rate(w, "up")
-        if col_down.button("👎", key=f"fb_down_{query_id}_{wine_id}", help=t("feedback_down", locale)):
-            _rate(w, "down")
+
+        # Hidden anchor spans are injected in each column.  Pure-CSS <style>
+        # via st.markdown is scoped by React and can't reliably reach siblings,
+        # so styling is done via JS below.  The base CSS (injected into <head>
+        # once per session) collapses the stMarkdownContainer wrappers so the
+        # spans never cause a layout shift.
+        with col_up:
+            st.markdown(f'<span class="{mk_u}"></span>', unsafe_allow_html=True)
+            if st.button("👍", key=f"fb_up_{query_id}_{wine_id}", help=t("feedback_up", locale)):
+                _toggle(w, "up")
+                st.rerun()
+
+        with col_down:
+            st.markdown(f'<span class="{mk_d}"></span>', unsafe_allow_html=True)
+            if st.button("👎", key=f"fb_down_{query_id}_{wine_id}", help=t("feedback_down", locale)):
+                _toggle(w, "down")
+                st.rerun()
+
+    color_map_json = json.dumps(color_map)
+    mines_json = json.dumps(mines)
+    components.html(
+        f"""<script>
+var COLORS = {color_map_json};
+var MINE   = {mines_json};
+var pDoc   = window.parent.document;
+
+// ── Base CSS (once per page load): collapse fbm marker containers ────────────
+// Injected into <head> so it is global and not scoped by React.
+if (!pDoc.getElementById('vino-fb-base')) {{
+    var bs = pDoc.createElement('style');
+    bs.id = 'vino-fb-base';
+    bs.textContent =
+        'div[data-testid="stMarkdownContainer"]:has(span[class^="fbm"]){{' +
+        'height:0!important;overflow:hidden!important;' +
+        'min-height:0!important;padding:0!important;margin:0!important}}';
+    pDoc.head.appendChild(bs);
+}}
+
+// ── Per-render: colour active buttons, reset inactive ones ───────────────────
+// Scoped to MINE so each message manages only its own buttons.
+function apply() {{
+    pDoc.querySelectorAll('span[class^="fbm"]').forEach(function(span) {{
+        var mk = span.className.trim();
+        if (!(mk in MINE)) return;
+        var vb  = span.closest('[data-testid="stVerticalBlock"]');
+        var btn = vb && vb.querySelector('button');
+        if (!btn) return;
+        var c = COLORS[mk];
+        if (c) {{
+            btn.style.setProperty('background',    c, 'important');
+            btn.style.setProperty('border-color',  c, 'important');
+            btn.style.setProperty('color', 'white', 'important');
+        }} else {{
+            btn.style.removeProperty('background');
+            btn.style.removeProperty('border-color');
+            btn.style.removeProperty('color');
+        }}
+    }});
+}}
+(function run(n) {{ apply(); if (n > 0) setTimeout(function(){{ run(n-1); }}, 150); }})(10);
+</script>""",
+        height=0,
+    )
 
 
 def render_assistant_extras(

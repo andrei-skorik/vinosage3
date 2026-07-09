@@ -134,7 +134,7 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> None:
         for value, bucket in (
             (wine_type, preferred_types), (wine_grape, preferred_grapes), (wine_style, preferred_styles),
         ):
-            if value and value not in bucket:
+            if value and isinstance(value, str) and value not in bucket:
                 bucket.add(value)
                 changed = True
     elif rating == "down":
@@ -142,7 +142,7 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> None:
             (wine_grape, disliked_grapes, preferred_grapes),
             (wine_style, disliked_styles, preferred_styles),
         ):
-            if value and value not in preferred_bucket and value not in dislike_bucket:
+            if value and isinstance(value, str) and value not in preferred_bucket and value not in dislike_bucket:
                 dislike_bucket.add(value)
                 changed = True
 
