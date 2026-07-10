@@ -31,6 +31,14 @@ class TestExistingPatterns:
     def test_find_me_recommendations(self):
         assert _route("Can you find me a few recommendations?") == "recommend"
 
+    def test_give_me_recomendations_typo(self):
+        # Single-m typo "recomendations" must still route to recommend
+        assert _route("Give me some recomendations for tonight") == "recommend"
+
+    def test_recomend_me_something_typo(self):
+        # Single-m typo in verb form "recomend me something"
+        assert _route("recomend me something good") == "recommend"
+
     def test_compare_before_educate(self):
         assert _route("Compare Malbec and Merlot styles") == "compare"
 
