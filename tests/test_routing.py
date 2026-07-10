@@ -21,6 +21,16 @@ class TestExistingPatterns:
     def test_whats_a_good_italian_red(self):
         assert _route("What's a good full-bodied Italian red?") == "recommend"
 
+    def test_give_me_recommendations_for_tonight(self):
+        # Imperative "give me ... recommendations" must route to recommend
+        assert _route("Give me some recommendations for tonight") == "recommend"
+
+    def test_show_me_recommendations(self):
+        assert _route("Show me some wine recommendations please") == "recommend"
+
+    def test_find_me_recommendations(self):
+        assert _route("Can you find me a few recommendations?") == "recommend"
+
     def test_compare_before_educate(self):
         assert _route("Compare Malbec and Merlot styles") == "compare"
 

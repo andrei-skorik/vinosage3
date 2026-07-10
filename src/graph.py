@@ -86,6 +86,9 @@ _EDUCATE_PATTERNS = [
 _RECOMMEND_PATTERNS = [
     # English — explicit & interrogative
     r"\b(recommend|suggest)\b.{0,20}\b(me|for me|something)\b",
+    # "Give/show/find/get me (some) recommendations" — imperative form where the
+    # verb precedes "me" and "recommendations" follows with optional qualifiers.
+    r"\b(?:give|show|find|get)\s+me\b.{0,30}\brecommendations?\b",
     r"\bwhat\s+should\s+i\s+(try|drink|buy)\b",
     # "What's a good/great/nice/decent/best X?" — a recommendation request,
     # not an educational one; must appear before the broad what's educate pattern.
