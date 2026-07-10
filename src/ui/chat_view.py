@@ -229,14 +229,16 @@ def render_feedback_buttons(
         ratings.update(loaded)
         st.session_state["wine_ratings_loaded"] = True
 
-    def _bust_profile_state() -> None:
-        """Clear sidebar profile cache + all preference widget states.
+    def _bust_widget_state() -> None:
+        """Clear sidebar multiselect widget states only.
 
-        st.multiselect ignores `default` on reruns when widget state already
-        exists in session_state — popping those keys forces Streamlit to
-        re-initialise them from the fresh profile on the next rerun.
+        st.multiselect ignores `default` on reruns when the widget key exists
+        in session_state — popping those keys forces Streamlit to re-initialise
+        them from the current _prefs_cache on the next rerun.
+        _prefs_cache itself is intentionally NOT cleared here: it is updated
+        in-place by _toggle so the sidebar reflects the change immediately
+        without a round-trip DB read.
         """
-        st.session_state.pop("_prefs_cache", None)
         for _k in (
             "pref_types", "pref_grapes", "pref_countries",
             "pref_styles", "pref_characteristics",
@@ -252,8 +254,10 @@ def render_feedback_buttons(
             ratings[wine_id] = None
             if user_id:
                 delete_feedback(user_id=user_id, wine_id=wine_id)
-                fold_feedback(user_id, wine, "none")
-                _bust_profile_state()
+                new_profile = fold_feedback(user_id, wine, "none")
+                if new_profile is not None:
+                    st.session_state["_prefs_cache"] = new_profile
+                _bust_widget_state()
             return
         ratings[wine_id] = direction
         ok = log_feedback(
@@ -266,8 +270,10 @@ def render_feedback_buttons(
         )
         if ok:
             if user_id:
-                fold_feedback(user_id, wine, direction)
-                _bust_profile_state()
+                new_profile = fold_feedback(user_id, wine, direction)
+                if new_profile is not None:
+                    st.session_state["_prefs_cache"] = new_profile
+                _bust_widget_state()
             st.toast(t("feedback_saved", locale))
 
     # color_map: active marker → CSS colour (absent = reset to default).

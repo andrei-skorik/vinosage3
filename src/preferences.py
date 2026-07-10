@@ -98,7 +98,7 @@ def delete_preferences(user_id: str) -> bool:
         return False
 
 
-def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> None:
+def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, Any] | None:
     """Fold a 👍 / 👎 / toggle-off into the taste profile (SPEC §5.4).
 
     rating == "up"   → add type/grape/style to preferred_*;
@@ -175,24 +175,41 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> None:
                 changed = True
 
     if not changed:
-        return
+        return None
 
+    updated: dict[str, Any] = {
+        **profile,
+        "expertise_level":           profile.get("expertise_level", "beginner"),
+        "preferred_types":           sorted(preferred_types),
+        "preferred_grapes":          sorted(preferred_grapes),
+        "preferred_countries":       profile.get("preferred_countries") or [],
+        "preferred_regions":         profile.get("preferred_regions") or [],
+        "preferred_styles":          sorted(preferred_styles),
+        "preferred_characteristics": profile.get("preferred_characteristics") or [],
+        "disliked_types":            sorted(disliked_types),
+        "disliked_grapes":           sorted(disliked_grapes),
+        "disliked_styles":           sorted(disliked_styles),
+        "min_price_eur_cents":       profile.get("min_price_eur_cents"),
+        "max_price_eur_cents":       profile.get("max_price_eur_cents"),
+        "notes":                     profile.get("notes"),
+    }
     upsert_preferences(
         user_id,
-        expertise_level=profile.get("expertise_level", "beginner"),
-        preferred_types=sorted(preferred_types),
-        preferred_grapes=sorted(preferred_grapes),
-        preferred_countries=profile.get("preferred_countries") or [],
-        preferred_regions=profile.get("preferred_regions") or [],
-        preferred_styles=sorted(preferred_styles),
-        preferred_characteristics=profile.get("preferred_characteristics") or [],
-        disliked_types=sorted(disliked_types),
-        disliked_grapes=sorted(disliked_grapes),
-        disliked_styles=sorted(disliked_styles),
-        min_price_eur_cents=profile.get("min_price_eur_cents"),
-        max_price_eur_cents=profile.get("max_price_eur_cents"),
-        notes=profile.get("notes"),
+        expertise_level=updated["expertise_level"],
+        preferred_types=updated["preferred_types"],
+        preferred_grapes=updated["preferred_grapes"],
+        preferred_countries=updated["preferred_countries"],
+        preferred_regions=updated["preferred_regions"],
+        preferred_styles=updated["preferred_styles"],
+        preferred_characteristics=updated["preferred_characteristics"],
+        disliked_types=updated["disliked_types"],
+        disliked_grapes=updated["disliked_grapes"],
+        disliked_styles=updated["disliked_styles"],
+        min_price_eur_cents=updated["min_price_eur_cents"],
+        max_price_eur_cents=updated["max_price_eur_cents"],
+        notes=updated["notes"],
     )
+    return updated
 
 
 # ── Explicit, confident-only signal extraction (SPEC §5.3 Write) ─────────────
