@@ -170,3 +170,41 @@ class TestClassifyRouteWithHistory:
         ]
         # Short reply but non-recommend context → general
         assert _route("interesting", history) == "general"
+
+
+# ── Multilingual "give me recommendations" (imperative / noun form) ───────────
+
+class TestMultilingualImperativeRecommend:
+    # Russian
+    def test_russian_dai_mne_rekomendatsii(self):
+        assert _route("Дай мне рекомендации на сегодня вечером") == "recommend"
+
+    def test_russian_dai_nam_rekomendatsii(self):
+        assert _route("Дайте нам рекомендации") == "recommend"
+
+    def test_russian_porekomenduiy(self):
+        # "Порекомендуй мне" — prefix "по" pushes \b before п, not р
+        assert _route("Порекомендуй мне что-нибудь хорошее") == "recommend"
+
+    def test_russian_podskai_rekomendatsii(self):
+        assert _route("Подбери мне рекомендации по вкусу") == "recommend"
+
+    # German
+    def test_german_gib_mir_empfehlungen(self):
+        assert _route("Gib mir einige Empfehlungen für heute Abend") == "recommend"
+
+    def test_german_zeig_mir_empfehlungen(self):
+        assert _route("Zeig mir Empfehlungen") == "recommend"
+
+    # Finnish
+    def test_finnish_suosittele(self):
+        assert _route("Suosittele minulle jotain hyvää") == "recommend"
+
+    def test_finnish_mita_pitaisi_juoda(self):
+        assert _route("Mitä minun pitäisi juoda tänä iltana?") == "recommend"
+
+    def test_finnish_mita_kannattaisi_kokeilla(self):
+        assert _route("Mitä kannattaisi kokeilla?") == "recommend"
+
+    def test_finnish_anna_minulle_suosituksia(self):
+        assert _route("Anna minulle suosituksia") == "recommend"

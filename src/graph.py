@@ -102,18 +102,31 @@ _RECOMMEND_PATTERNS = [
     # Russian
     r"\bпосовет\w+\b", r"\bчто\s+(мне|бы)\s+(попробовать|выпить|взять|купить)\b",
     r"\bрекоменд\w+\s+мне\b",
+    # "Порекомендуй мне" — prefix "по" pushes word boundary before "п", not "р",
+    # so \bрекоменд\w+ above misses it; catch the full prefixed verb explicitly.
+    r"\bпорекоменд\w+\b",
+    # "Дай/покажи/подбери/найди мне рекомендации" — noun form, mirrors English fix.
+    r"\b(?:дай|дайте|покажи|подбери|найди)\s+(?:мне|нам)\b.{0,30}\bрекомендаци\w+\b",
     r"\bесть\s+(сохранённый|сохраненный)\s+(вкусовой\s+)?профил\w+\b",
     r"\bиспользу\w+\s+(мой\s+)?(сохранённый|сохраненный|вкусовой)?\s*(профил|предпочтени)\w+\b",
     # German — "Was ist ein guter/großartiger/bester X?" must precede the broad
     # was ist educate pattern. \w* covers adjective inflections (gute/guter/gutes…).
     r"^\s*was\s+ist\s+(?:ein\s+)?(?:gut\w*|groß\w*|best\w*)\b",
     r"\bempfiehl\b|\bempfehle?\b|\bempfehlt\b", r"\bwas\s+soll\s+ich\s+(probieren|trinken|kaufen)\b",
+    # "Gib/zeig mir Empfehlungen" — noun form not covered by verb patterns above.
+    r"\b(?:gib|zeig|find|such)\s+mir\b.{0,30}\bempfehlungen\b",
     r"\bhabe\s+(ein\s+)?(gespeichertes?\s+)?geschmacksprofil\b",
     # Russian — "Что такое хорошее/лучшее X?" guard before the broad что такое pattern.
     r"\bчто\s+такое\s+(?:хорош\w+|лучш\w+|отличн\w+)\b",
     # Finnish — "Mikä on hyvä/mahtava/loistava/paras X?" mirrors the English
     # "What's a good/great/best X?" fix — must precede the broad mikä on educate pattern.
     r"^\s*mikä\s+on\s+(?:hyvä|mahtava|loistava|paras)\b",
+    # Finnish — imperative/interrogative forms not covered by the "what's a good X?" guard.
+    # suosittele = recommend (verb); mitä pitäisi/kannattaisi = what should I.
+    r"\bsuosittele\b",
+    r"\bmitä\s+(?:minun\s+)?(?:pitäisi|kannattaisi)\s+(?:juoda|kokeilla|ostaa|maistaa)\b",
+    # "Anna minulle suosituksia" — imperative "give me recommendations" noun form.
+    r"\banna\s+minulle\b.{0,30}\bsuosituksi\w+\b",
 ]
 
 # Keywords that signal the previous assistant turn was in recommend/profile context.
