@@ -28,18 +28,19 @@ class TestRecommendForMe:
             assert rec["wine_id"] in catalog_ids
             assert rec["type"] == "Red"
 
-    def test_empty_profile_asks_one_question_names_no_wines(self, mock_df):
+    def test_empty_profile_returns_diverse_general_picks(self, mock_df):
+        """Empty profile → diverse picks from catalog, not an empty list asking questions."""
         with patch(_MODULE, return_value=mock_df):
             from src.tools.recommend_for_me import build_recommend_for_me_tool
             tool = build_recommend_for_me_tool({})
             result = tool.invoke({"occasion": None, "max_price_eur": None, "limit": 3})
 
-        assert result["result"] == "empty_profile"
-        assert result["recommendations"] == []
+        assert result["result"] == "no_profile_general"
+        assert len(result["recommendations"]) > 0
         assert "agent_instruction" in result
-        catalog_titles = mock_df["title"].tolist()
-        for title in catalog_titles:
-            assert title not in result["agent_instruction"]
+        catalog_ids = set(mock_df["wine_id"].tolist())
+        for rec in result["recommendations"]:
+            assert rec["wine_id"] in catalog_ids
 
     def test_non_catalog_grape_returns_no_catalog_match(self, mock_df):
         """The profile's preferred grape doesn't exist anywhere in the

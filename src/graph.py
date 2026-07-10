@@ -176,18 +176,22 @@ def _is_recommend_followup(query: str, history: list[dict[str, Any]] | None) -> 
 def _classify_route(query: str, history: list[dict[str, Any]] | None) -> str:
     """Educate / recommend / compare / general — SPEC §5.5.
 
-    Food-pairing detection takes priority over everything else: pair_with_food
-    must stay mandatory (edge case #18) regardless of how the rest of the
-    query reads, so a food query always routes to 'general' (full retrieval +
-    full tool set, unchanged behaviour from before the graph existed).
+    Explicit recommend patterns beat food-history context so that
+    "Give me some recommendations" never mis-routes to general just because
+    an earlier turn mentioned a food word.  A query that matches a recommend
+    pattern AND contains a food keyword in the *current message* still goes to
+    general (e.g. "Recommend a wine for my salmon dinner").
     """
     from src.agent import _is_food_query  # local import: src.agent imports this module
 
-    if _is_food_query(query, history):
-        return "general"
     q = query.lower()
     if any(re.search(p, q) for p in _RECOMMEND_PATTERNS):
-        return "recommend"
+        # Recommend pattern wins — unless the *current* query is itself a food
+        # request (e.g. "Recommend wine for salmon"), in which case food wins.
+        if not _is_food_query(query, None):
+            return "recommend"
+    if _is_food_query(query, history):
+        return "general"
     # compare before educate: "Compare X and Y" must not accidentally match
     # educate patterns such as "difference between" before reaching this check.
     if " vs " in q or " versus " in q or re.search(r"^\s*compare\b", q):

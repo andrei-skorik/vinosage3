@@ -80,47 +80,129 @@ def _overlap_score(row, profile: dict[str, Any]) -> int:
     return score
 
 
+def _diverse_picks(df, occasion: str | None, max_price_eur: float | None, limit: int) -> list[dict[str, Any]]:
+    """Return a varied selection when no profile filters exist: one wine per
+    distinct type (Red/White/Rosé/Sparkling/…) sorted by price, capped at limit.
+    """
+    mask = df["is_active"].notna()
+    if max_price_eur is not None:
+        max_cents = int(max_price_eur * 100)
+        mask = mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] <= max_cents))
+    pool = df[mask].copy()
+    if pool.empty:
+        pool = df[df["is_active"].notna()].copy()
+    pool = pool.sort_values("price_eur_cents", na_position="last")
+    picks: list[dict] = []
+    seen_types: set[str] = set()
+    for row in pool.to_dict("records"):
+        wtype = row.get("type") or ""
+        if wtype not in seen_types:
+            seen_types.add(wtype)
+            picks.append(row)
+            if len(picks) >= limit:
+                break
+    if len(picks) < limit:
+        for row in pool.to_dict("records"):
+            if row not in picks:
+                picks.append(row)
+                if len(picks) >= limit:
+                    break
+    return picks[:limit]
+
+
+def _preferred_subset(df, base_mask, profile: dict[str, Any]):
+    """Apply preferred-dimension filters with style relaxation only.
+
+    Tries the full AND intersection first. If no match, relaxes the style
+    constraint — so a user who prefers Malbec AND "Bold & Spicy" still gets
+    Malbec wines when no Malbec carries that exact style label.
+
+    Grape/type/country/region constraints are never relaxed: if the user's
+    preferred grape isn't stocked (or is excluded by dislike filters), the
+    caller surfaces a no_catalog_match instead of showing unrelated wines
+    (SPEC §5.3).
+    """
+    active = [(key, col) for key, col in _PREFERRED_LIST_FIELDS if profile.get(key)]
+    if not active:
+        return df[base_mask]
+
+    def _apply(skip_keys):
+        m = base_mask.copy()
+        for key, col in active:
+            if key not in skip_keys:
+                m = m & df[col].isin(profile.get(key))
+        return df[m]
+
+    # 1. Full match: all preferred dimensions
+    subset = _apply(skip_keys=set())
+    if not subset.empty:
+        return subset
+
+    # 2. Relax style — only when there are other identity constraints
+    #    (grape/type/country/region) that can actually be satisfied.
+    non_style_active = [(k, c) for k, c in active if k != "preferred_styles"]
+    if non_style_active:
+        identity_subset = _apply(skip_keys={"preferred_styles"})
+        if not identity_subset.empty:
+            return identity_subset
+
+    # Identity constraints can't be met even without style — return empty
+    # so the caller reports no_catalog_match (SPEC §5.3).
+    return df.iloc[0:0]
+
+
 def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float | None, limit: int) -> dict[str, Any]:
     try:
         profile = profile or {}
-
-        if _profile_is_empty(profile):
-            return {
-                "recommendations": [],
-                "result": "empty_profile",
-                "agent_instruction": (
-                    "The user has no saved taste yet. Ask ONE short question "
-                    "(e.g. red or white? sweet or dry?) instead of guessing. Name no wines."
-                ),
-            }
 
         df = get_active_wines_df()
         if df.empty:
             return _ERR("INTERNAL", "Catalog not available")
 
-        mask = df["is_active"].notna()
+        if _profile_is_empty(profile):
+            rows = _diverse_picks(df, occasion, max_price_eur, limit)
+            recommendations = []
+            for row in rows:
+                cents = row.get("price_eur_cents")
+                recommendations.append({
+                    "wine_id":   row["wine_id"],
+                    "title":     row["title"],
+                    "price_eur": round(cents / 100, 2) if cents else None,
+                    "type":      row.get("type"),
+                    "grape":     row.get("grape"),
+                    "style":     row.get("style"),
+                    "rationale": "General pick from our catalog.",
+                })
+            return {
+                "recommendations": recommendations,
+                "count": len(recommendations),
+                "result": "no_profile_general",
+                "agent_instruction": (
+                    "The user has no saved taste profile. Present these as varied general picks "
+                    "from our catalog. After your answer add ONE short sentence inviting them "
+                    "to save preferences in the sidebar for personalised future picks."
+                ),
+            }
 
-        for key, col in _PREFERRED_LIST_FIELDS:
-            values = profile.get(key) or []
-            if values:
-                mask = mask & df[col].isin(values)
+        # Hard constraints: disliked dimensions and price range always excluded
+        hard_mask = df["is_active"].notna()
 
         for key, col in _DISLIKED_LIST_FIELDS:
             values = profile.get(key) or []
             if values:
-                mask = mask & ~df[col].isin(values)
+                hard_mask = hard_mask & ~df[col].isin(values)
 
         min_cents = profile.get("min_price_eur_cents")
         if min_cents is not None:
-            mask = mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] >= min_cents))
+            hard_mask = hard_mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] >= min_cents))
 
         effective_max_cents = (
             int(max_price_eur * 100) if max_price_eur is not None else profile.get("max_price_eur_cents")
         )
         if effective_max_cents is not None:
-            mask = mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] <= effective_max_cents))
+            hard_mask = hard_mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] <= effective_max_cents))
 
-        subset = df[mask]
+        subset = _preferred_subset(df, hard_mask, profile)
 
         if subset.empty:
             unstocked = _unstocked_dimension(profile, df)
@@ -152,7 +234,7 @@ def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float |
             reason_bits = " and ".join(f"{row.get(d)}" for d in matched_dims) if matched_dims else None
             rationale = (
                 f"Matches your taste for {reason_bits}." if reason_bits
-                else "Fits your saved price range."
+                else "Closest available match from our catalog."
             )
             recommendations.append({
                 "wine_id":   row["wine_id"],

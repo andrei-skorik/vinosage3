@@ -325,10 +325,45 @@ def main() -> None:
                     # Resolve this turn's taste profile: authed read (RLS) for
                     # logged-in users, the in-session dict for anonymous ones
                     # (anon profiles are never persisted — SPEC §5.3).
+                    # Re-use _prefs_cache populated by the sidebar earlier this
+                    # rerun; only fall back to a fresh DB read if the cache is
+                    # absent (e.g. first load before sidebar had a chance to set
+                    # it). This avoids a redundant Supabase call on every turn
+                    # and prevents a transient timeout from silently zeroing out
+                    # the profile passed to recommend_for_me.
                     auth = _current_user()
                     user_id = auth.get("user_id") if auth else None
                     if auth:
-                        profile = get_preferences(auth["access_token"], auth["refresh_token"], user_id)
+                        profile = st.session_state.get("_prefs_cache")
+                        if profile is None:
+                            profile = get_preferences(auth["access_token"], auth["refresh_token"], user_id)
+                            st.session_state["_prefs_cache"] = profile
+                        # _prefs_cache can be EMPTY_PROFILE (all-empty lists) if the DB
+                        # read failed (expired token, transient timeout) while the sidebar
+                        # widget keys still hold the user's last-known selections.
+                        # If the cache looks empty but the sidebar widgets have data,
+                        # build the profile from widget state so the agent isn't blinded.
+                        _LIST_FIELDS = (
+                            "preferred_types", "preferred_grapes", "preferred_countries",
+                            "preferred_styles", "preferred_characteristics",
+                        )
+                        if not any((profile or {}).get(k) for k in _LIST_FIELDS):
+                            _widget_profile = {
+                                "expertise_level": st.session_state.get("pref_expertise", "beginner"),
+                                "preferred_types":           list(st.session_state.get("pref_types", []) or []),
+                                "preferred_grapes":          list(st.session_state.get("pref_grapes", []) or []),
+                                "preferred_countries":       list(st.session_state.get("pref_countries", []) or []),
+                                "preferred_styles":          list(st.session_state.get("pref_styles", []) or []),
+                                "preferred_characteristics": list(st.session_state.get("pref_characteristics", []) or []),
+                                "disliked_types":            list(st.session_state.get("disliked_types", []) or []),
+                                "disliked_grapes":           list(st.session_state.get("disliked_grapes", []) or []),
+                                "disliked_styles":           list(st.session_state.get("disliked_styles", []) or []),
+                                "min_price_eur_cents": (profile or {}).get("min_price_eur_cents"),
+                                "max_price_eur_cents": (profile or {}).get("max_price_eur_cents"),
+                                "notes": None,
+                            }
+                            if any(_widget_profile.get(k) for k in _LIST_FIELDS):
+                                profile = _widget_profile
                     else:
                         profile = st.session_state.anon_profile
 

@@ -91,12 +91,22 @@ treat it as a clarified request — start directly with your recommendation. Do 
 reference the previous response. One good wine recommendation is a complete, correct answer.
 
 TOOLS — pick the right one:
+- recommend_for_me: personalised picks — see RECOMMENDATION QUERIES below.
 - filter_wines: hard constraints, user wants matching wines.
 - pair_with_food: user names a dish/cuisine — see PAIRING QUERIES below.
 - calculate_budget: user gives a total budget and a number of bottles.
 - compare_wines: user asks to compare 2–3 wines OR grape varieties side by side.
 - wine_stats: user asks for a NUMBER (count, avg/min/max price, avg ABV) — numbers only,
   never a wine list.
+
+RECOMMENDATION QUERIES (CRITICAL): When the user asks for recommendations, what to try/
+drink/buy, or for personalised picks:
+1. You MUST call recommend_for_me FIRST — no clarifying questions before calling it.
+2. Present ONLY the wines in the returned `recommendations` list. Do NOT substitute wines
+   from the RAG context or any other source.
+3. Follow the tool's agent_instruction exactly when present. If recommendations is empty,
+   the agent_instruction tells you what to do — follow it and stop.
+recommend_for_me is the sole source of truth for personalised picks.
 
 PAIRING QUERIES (CRITICAL): When the user asks what wine goes with any food or dish:
 1. You MUST call pair_with_food — no exceptions.
@@ -348,8 +358,12 @@ def _is_food_query(query: str, history: list[dict[str, Any]] | None) -> bool:
     if found or _has_ru_food(query):
         return True
     if history:
+        # Scan only user messages — assistant wine descriptions contain tasting-note
+        # words (chocolate, spicy, mushroom) that appear in _FOOD_QUERY_KWS and
+        # would incorrectly mark every subsequent query as a food-pairing request.
+        user_msgs = [m for m in history if m.get("role") == "user"]
         recent = " ".join(
-            m["content"] for m in history[-6:]
+            m["content"] for m in user_msgs[-3:]
             if isinstance(m.get("content"), str)
         )
         return (
