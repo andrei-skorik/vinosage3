@@ -135,7 +135,32 @@ TONE: Never open with "Based on the catalog", "Based on our catalog", "Based on 
 wines I have", or any variant of that phrase — it sounds robotic. Instead start with
 the recommendation itself or a brief conversational line tied to the question.
 Good examples: "For dark chocolate, one wine stands out:" / "Great pairing choice —"
-/ "Absolutely." / jump straight to the bold wine name. Vary your opener every response."""
+/ "Absolutely." / jump straight to the bold wine name. Vary your opener every response.
+
+{expertise_note}"""
+
+
+_EXPERTISE_NOTES: dict[str, str] = {
+    "beginner": (
+        "EXPERTISE: The user is a beginner. Use plain, everyday language — no jargon. "
+        "Briefly define any technical term you must use (e.g. 'tannins — the drying "
+        "sensation you feel on your gums'). Favour flavour analogies they will recognise "
+        "(berries, citrus, chocolate, vanilla) over technical descriptors like 'terroir' "
+        "or 'élevage'. Keep explanations short and encouraging."
+    ),
+    "enthusiast": (
+        "EXPERTISE: The user is a wine enthusiast. Standard wine vocabulary is fine — "
+        "terroir, tannins, acidity, finish, appellation — no need to define it. "
+        "Include regional context, vintage notes, and food-pairing reasoning when relevant. "
+        "Match their engaged, curious tone."
+    ),
+    "connoisseur": (
+        "EXPERTISE: The user is a connoisseur. Use full professional wine language — "
+        "élevage, typicité, extraction, malolactic fermentation, reductive winemaking, etc. "
+        "Discuss producer philosophy, vintage conditions, and technical winemaking detail "
+        "where the catalog provides it. No simplification; treat them as a peer."
+    ),
+}
 
 
 @dataclass
@@ -178,9 +203,14 @@ def _build_messages(
     locale: str,
     history: list[dict[str, Any]] | None,
     rag_context: list[RetrievedWine],
+    expertise_level: str = "beginner",
 ) -> list[dict[str, Any]]:
     locale_name = _LOCALE_NAMES.get(locale, "English")
-    system_msg = {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(locale_name=locale_name)}
+    expertise_note = _EXPERTISE_NOTES.get(expertise_level, _EXPERTISE_NOTES["beginner"])
+    system_msg = {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(
+        locale_name=locale_name,
+        expertise_note=expertise_note,
+    )}
 
     messages = [system_msg]
 

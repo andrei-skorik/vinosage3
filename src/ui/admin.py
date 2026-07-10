@@ -81,9 +81,12 @@ def _render_dev_settings(locale: str) -> None:
     st.session_state.dev_tools_enabled = enabled_map
 
     st.markdown(f"**{t('admin_system_prompt_label', locale)}**")
-    from src.agent import _LOCALE_NAMES, SYSTEM_PROMPT_TEMPLATE
+    from src.agent import _EXPERTISE_NOTES, _LOCALE_NAMES, SYSTEM_PROMPT_TEMPLATE
     locale_name = _LOCALE_NAMES.get(locale, "English")
-    st.code(SYSTEM_PROMPT_TEMPLATE.format(locale_name=locale_name), language=None)
+    st.code(SYSTEM_PROMPT_TEMPLATE.format(
+        locale_name=locale_name,
+        expertise_note=_EXPERTISE_NOTES["beginner"],
+    ), language=None)
 
     # Diagnostic only — never required, never blocks the app (SPEC §3.5).
     if LANGSMITH_ENABLED:

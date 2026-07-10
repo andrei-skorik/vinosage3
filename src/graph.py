@@ -269,11 +269,13 @@ def _tools_for_route(route: str, profile: dict[str, Any], disabled_tools: list[s
 def agent_node(state: AgentState) -> dict[str, Any]:
     from src.agent import _build_messages  # local import: src.agent imports this module
 
+    profile = state.get("profile") or {}
     messages = _build_messages(
         state["query"],
         state.get("locale") or DEFAULT_LOCALE,
         state.get("history"),
         state.get("rag_context") or [],
+        expertise_level=profile.get("expertise_level", "beginner"),
     )
     tools = _tools_for_route(
         state.get("route") or "general", state.get("profile") or {}, state.get("disabled_tools")
