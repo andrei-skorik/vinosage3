@@ -101,12 +101,16 @@ _RECOMMEND_PATTERNS = [
     r"\bрекоменд\w+\s+мне\b",
     r"\bесть\s+(сохранённый|сохраненный)\s+(вкусовой\s+)?профил\w+\b",
     r"\bиспользу\w+\s+(мой\s+)?(сохранённый|сохраненный|вкусовой)?\s*(профил|предпочтени)\w+\b",
-    # German
+    # German — "Was ist ein guter/großartiger/bester X?" must precede the broad
+    # was ist educate pattern. \w* covers adjective inflections (gute/guter/gutes…).
+    r"^\s*was\s+ist\s+(?:ein\s+)?(?:gut\w*|groß\w*|best\w*)\b",
     r"\bempfiehl\b|\bempfehle?\b|\bempfehlt\b", r"\bwas\s+soll\s+ich\s+(probieren|trinken|kaufen)\b",
     r"\bhabe\s+(ein\s+)?(gespeichertes?\s+)?geschmacksprofil\b",
-    # Finnish
-    r"\bsuosittele\b", r"\bmitä\s+(minun\s+)?pitäisi\s+(kokeilla|juoda|ostaa)\b",
-    r"\bminulla\s+on\s+(tallennettu\s+)?makuprofiili\b",
+    # Russian — "Что такое хорошее/лучшее X?" guard before the broad что такое pattern.
+    r"\bчто\s+такое\s+(?:хорош\w+|лучш\w+|отличн\w+)\b",
+    # Finnish — "Mikä on hyvä/mahtava/loistava/paras X?" mirrors the English
+    # "What's a good/great/best X?" fix — must precede the broad mikä on educate pattern.
+    r"^\s*mikä\s+on\s+(?:hyvä|mahtava|loistava|paras)\b",
 ]
 
 # Keywords that signal the previous assistant turn was in recommend/profile context.

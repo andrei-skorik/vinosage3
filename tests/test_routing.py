@@ -33,6 +33,28 @@ class TestExistingPatterns:
     def test_food_query_stays_general(self):
         assert _route("What wine goes with steak?") == "general"
 
+    def test_finnish_whats_a_good_routes_recommend(self):
+        assert _route("Mikä on hyvä täyteläinen italialainen punaviini?") == "recommend"
+
+    def test_finnish_mika_on_bare_stays_educate(self):
+        assert _route("Mikä on tanniini?") == "educate"
+
+    def test_german_was_ist_ein_gutes_routes_recommend(self):
+        # "Was ist ein gutes X?" is recommend, not educate
+        assert _route("Was ist ein gutes vollmundiges Rotwein aus Italien?") == "recommend"
+
+    def test_german_was_ist_bare_stays_educate(self):
+        # "Was ist Tannin?" is a genuine educational query
+        assert _route("Was ist Tannin?") == "educate"
+
+    def test_russian_chto_takoe_khoroshee_routes_recommend(self):
+        # "Что такое хорошее X?" is recommend, not educate
+        assert _route("Что такое хорошее итальянское красное вино?") == "recommend"
+
+    def test_russian_chto_takoe_bare_stays_educate(self):
+        # "Что такое танины?" is a genuine educational query
+        assert _route("Что такое танины?") == "educate"
+
 
 # ── Profile-explicit patterns ─────────────────────────────────────────────────
 
