@@ -238,6 +238,7 @@ def render_feedback_buttons(
             if user_id:
                 delete_feedback(user_id=user_id, wine_id=wine_id)
                 fold_feedback(user_id, wine, "none")
+                st.session_state.pop("_prefs_cache", None)
             return
         ratings[wine_id] = direction
         ok = log_feedback(
@@ -251,6 +252,9 @@ def render_feedback_buttons(
         if ok:
             if user_id:
                 fold_feedback(user_id, wine, direction)
+                # Bust the sidebar profile cache so the updated type/grape/style
+                # appears in Taste Profile immediately after st.rerun().
+                st.session_state.pop("_prefs_cache", None)
             st.toast(t("feedback_saved", locale))
 
     # color_map: active marker → CSS colour (absent = reset to default).
