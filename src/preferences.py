@@ -212,6 +212,40 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, 
     return updated
 
 
+# ── Feedback exclusion (Phase 3, step 5 / №1) ─────────────────────────────────
+
+def get_downrated_wine_ids(user_id: str) -> set[str]:
+    """Wine_ids the user currently has an active 👎 on (latest rating wins).
+
+    Latest-wins: the same wine may carry ratings from different turns
+    (unique key is user+query+wine); the most recent one is the user's
+    current stance. Service-role read, mirroring fold_feedback's client;
+    returns an empty set on ANY failure — exclusion is best-effort and must
+    never block recommendations (project convention).
+
+    Toggle-off ("none") deletes the row (src/logging_db.py::delete_feedback),
+    so an absent row already means "no stance" — no extra filtering needed
+    here for that case.
+    """
+    try:
+        db = get_service_db()
+        rows = (
+            db.table("recommendation_feedback")
+            .select("wine_id, rating, created_at")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        ).data or []
+        latest: dict[str, str] = {}
+        for r in rows:  # newest-first: first occurrence per wine wins
+            wid = r.get("wine_id")
+            if wid and wid not in latest:
+                latest[wid] = r.get("rating")
+        return {wid for wid, rating in latest.items() if rating == "down"}
+    except Exception:
+        return set()
+
+
 # ── Explicit, confident-only signal extraction (SPEC §5.3 Write) ─────────────
 
 _POSITIVE_VERBS = r"like|love|prefer|enjoy|adore"

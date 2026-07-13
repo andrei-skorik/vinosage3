@@ -41,6 +41,26 @@ class RecommendForMeArgs(BaseModel):
     limit:         int             = Field(3, ge=1, le=5)
 
 
+def _excluded_wine_ids(user_id: str | None) -> set:
+    """Wine_ids the user currently has an active 👎 on (Phase 3, step 5 / №1).
+
+    A down-rated wine must never be re-recommended, even when it matches the
+    profile on every other dimension — re-showing it reads as ignoring the
+    user's explicit signal. Latest-rating-wins semantics live in
+    src.preferences.get_downrated_wine_ids. Anonymous users have no feedback
+    rows (user_id guard in the UI), so None short-circuits to no exclusion.
+    Any failure returns an empty set: exclusion is best-effort and must never
+    break recommendations (project convention).
+    """
+    if not user_id:
+        return set()
+    try:
+        from src.preferences import get_downrated_wine_ids
+        return set(get_downrated_wine_ids(user_id) or ())
+    except Exception:
+        return set()
+
+
 def _profile_is_empty(profile: dict[str, Any]) -> bool:
     for key, _ in _PREFERRED_LIST_FIELDS:
         if profile.get(key):
@@ -80,17 +100,25 @@ def _overlap_score(row, profile: dict[str, Any]) -> int:
     return score
 
 
-def _diverse_picks(df, occasion: str | None, max_price_eur: float | None, limit: int) -> list[dict[str, Any]]:
+def _diverse_picks(df, occasion: str | None, max_price_eur: float | None, limit: int,
+                   excluded: set | None = None) -> list[dict[str, Any]]:
     """Return a varied selection when no profile filters exist: one wine per
     distinct type (Red/White/Rosé/Sparkling/…) sorted by price, capped at limit.
+    Down-rated wines (excluded) are dropped here too — a user with feedback
+    but a cleared profile must not see a wine they explicitly rejected.
     """
     mask = df["is_active"].notna()
+    if excluded:
+        mask = mask & ~df["wine_id"].isin(excluded)
     if max_price_eur is not None:
         max_cents = int(max_price_eur * 100)
         mask = mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] <= max_cents))
     pool = df[mask].copy()
     if pool.empty:
-        pool = df[df["is_active"].notna()].copy()
+        fallback_mask = df["is_active"].notna()
+        if excluded:
+            fallback_mask = fallback_mask & ~df["wine_id"].isin(excluded)
+        pool = df[fallback_mask].copy()
     pool = pool.sort_values("price_eur_cents", na_position="last")
     picks: list[dict] = []
     seen_types: set[str] = set()
@@ -151,7 +179,8 @@ def _preferred_subset(df, base_mask, profile: dict[str, Any]):
     return df.iloc[0:0]
 
 
-def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float | None, limit: int) -> dict[str, Any]:
+def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float | None, limit: int,
+           user_id: str | None = None) -> dict[str, Any]:
     try:
         profile = profile or {}
 
@@ -159,8 +188,10 @@ def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float |
         if df.empty:
             return _ERR("INTERNAL", "Catalog not available")
 
+        excluded = _excluded_wine_ids(user_id)
+
         if _profile_is_empty(profile):
-            rows = _diverse_picks(df, occasion, max_price_eur, limit)
+            rows = _diverse_picks(df, occasion, max_price_eur, limit, excluded=excluded)
             recommendations = []
             for row in rows:
                 cents = row.get("price_eur_cents")
@@ -184,27 +215,50 @@ def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float |
                 ),
             }
 
-        # Hard constraints: disliked dimensions and price range always excluded
-        hard_mask = df["is_active"].notna()
+        # Hard constraints: disliked dimensions and price range always excluded.
+        # Kept SEPARATE from the feedback exclusion so that, when the result
+        # is empty, we can tell an honest "everything matching was one you
+        # rated 👎" apart from a genuine "nothing in stock matches".
+        base_hard = df["is_active"].notna()
 
         for key, col in _DISLIKED_LIST_FIELDS:
             values = profile.get(key) or []
             if values:
-                hard_mask = hard_mask & ~df[col].isin(values)
+                base_hard = base_hard & ~df[col].isin(values)
 
         min_cents = profile.get("min_price_eur_cents")
         if min_cents is not None:
-            hard_mask = hard_mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] >= min_cents))
+            base_hard = base_hard & (df["price_eur_cents"].notna() & (df["price_eur_cents"] >= min_cents))
 
         effective_max_cents = (
             int(max_price_eur * 100) if max_price_eur is not None else profile.get("max_price_eur_cents")
         )
         if effective_max_cents is not None:
-            hard_mask = hard_mask & (df["price_eur_cents"].notna() & (df["price_eur_cents"] <= effective_max_cents))
+            base_hard = base_hard & (df["price_eur_cents"].notna() & (df["price_eur_cents"] <= effective_max_cents))
+
+        hard_mask = base_hard
+        if excluded:
+            hard_mask = hard_mask & ~df["wine_id"].isin(excluded)
 
         subset = _preferred_subset(df, hard_mask, profile)
 
         if subset.empty:
+            # Honesty branch (№1): if lifting ONLY the feedback exclusion
+            # yields matches, the profile itself is satisfiable — every
+            # matching wine is one the user explicitly rejected. Say that,
+            # rather than the misleading "nothing matches your taste".
+            if excluded and not _preferred_subset(df, base_hard, profile).empty:
+                return {
+                    "recommendations": [],
+                    "result": "all_downrated",
+                    "agent_instruction": (
+                        "Every catalog wine matching the user's taste profile is one they "
+                        "previously rated with a thumbs-down, so nothing new can be "
+                        "recommended. Say so plainly (no apology, no invention) and name "
+                        "no wines. Ask ONE short question: broaden the preferences, or "
+                        "revisit one of the previously rejected wines?"
+                    ),
+                }
             unstocked = _unstocked_dimension(profile, df)
             if unstocked:
                 instruction = (
@@ -268,15 +322,16 @@ def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float |
         return _ERR("INTERNAL", str(exc))
 
 
-def build_recommend_for_me_tool(profile: dict[str, Any]) -> StructuredTool:
-    """Build a request-scoped recommend_for_me tool bound to `profile` via closure."""
+def build_recommend_for_me_tool(profile: dict[str, Any], user_id: str | None = None) -> StructuredTool:
+    """Build a request-scoped recommend_for_me tool bound to `profile` (and the
+    user's feedback exclusion list) via closure — the LLM never passes identity."""
 
     def _run(
         occasion: str | None = None,
         max_price_eur: float | None = None,
         limit: int = 3,
     ) -> dict[str, Any]:
-        return _build(profile, occasion, max_price_eur, limit)
+        return _build(profile, occasion, max_price_eur, limit, user_id=user_id)
 
     return StructuredTool.from_function(
         func=_run,

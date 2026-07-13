@@ -229,17 +229,6 @@ def _build_messages(
     # explicitly mentions the dish — the pair_with_food tool handles the rest.
     # This prevents the LLM from seeing unrelated wines and hallucinating pairings.
     if rag_context:
-        # "dessert" omitted: it describes wine category in catalog text ("dessert wine"),
-        # not a specific food — matching it causes false positives (e.g. Veuve Demi-Sec).
-        # "cake" omitted: multi-word dishes like "dark chocolate cake" would extract "cake"
-        # and match wines paired with Madeira cake or fish cakes — wrong food context.
-        _FOOD_KWS = {
-            "chocolate","steak","beef","lamb","venison","pork",
-            "chicken","turkey","duck","salmon","tuna","fish","seafood","lobster",
-            "shrimp","shrimps","oyster","oysters","sushi","pasta","pizza","risotto",
-            "mushroom","mushrooms","truffle","truffles",
-            "cheese","salad","barbecue","curry","spicy","tagine","casserole","meat",
-        }
         def _in_kws(w: str) -> bool:
             return w in _FOOD_KWS or (w.endswith("s") and len(w) > 3 and w[:-1] in _FOOD_KWS)
 
@@ -299,6 +288,25 @@ def _build_messages(
     return messages
 
 
+# Layer 2 evidence keywords (own copy — deliberately not shared/imported
+# across layers; see tests/test_food_kws_sync.py for the guard that keeps
+# this set equal to pair_with_food._FOOD_NOUNS and app._HIST_FOOD_KWS).
+# "dessert" omitted: it describes wine category in catalog text ("dessert wine"),
+# not a specific food — matching it causes false positives (e.g. Veuve Demi-Sec).
+# "cake" omitted: multi-word dishes like "dark chocolate cake" would extract "cake"
+# and match wines paired with Madeira cake or fish cakes — wrong food context.
+_FOOD_KWS = {
+    "chocolate","steak","beef","lamb","venison","pork",
+    "chicken","turkey","duck","salmon","tuna","fish","seafood","lobster",
+    "shrimp","shrimps","oyster","oysters","sushi","pasta","pizza","risotto",
+    "mushroom","mushrooms","truffle","truffles",
+    "cheese","salad","barbecue","curry","spicy","tagine","casserole","meat",
+    "pudding","puddings","mousse","fondue","brownie","brownies","tart","tarts",
+    "bread","brioche","flatbread","noodle","noodles","dumpling","dumplings",
+    "prawn","prawns","crab","squid","octopus","scallop","scallops",
+    "quail","pheasant","burger","soup","stew","chilli","chili","tapas",
+}
+
 _FOOD_QUERY_KWS = {
     # English
     "chocolate","cake","steak","beef","lamb","venison","pork",
@@ -306,6 +314,10 @@ _FOOD_QUERY_KWS = {
     "shrimp","shrimps","oyster","oysters","sushi","pasta","pizza","risotto",
     "mushroom","mushrooms","truffle","truffles",
     "cheese","salad","barbecue","curry","spicy","tagine","casserole","meat",
+    "pudding","puddings","mousse","fondue","brownie","brownies","tart","tarts",
+    "bread","brioche","flatbread","noodle","noodles","dumpling","dumplings",
+    "prawn","prawns","crab","squid","octopus","scallop","scallops",
+    "quail","pheasant","burger","soup","stew","chilli","chili","tapas",
     # German — nominative forms cover most voice-query patterns
     "lachs","forelle","thunfisch","hecht","fisch","fleisch",
     "rind","lamm","schwein","kalb","huhn","ente","pute",
@@ -385,6 +397,7 @@ def run_agent(
     session_id: str | None = None,
     temperature: float = 0.2,
     disabled_tools: list[str] | None = None,
+    thread_id: str | None = None,
 ) -> AgentResult:
     """Run the LangGraph turn pipeline and return a structured result.
 
@@ -418,6 +431,7 @@ def run_agent(
         session_id=session_id or "unknown",
         temperature=temperature,
         disabled_tools=disabled_tools or [],
+        thread_id=thread_id,
     )
 
     latency_ms = int((time.monotonic() - t0) * 1000)

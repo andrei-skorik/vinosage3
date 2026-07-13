@@ -17,12 +17,13 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 
+from src.checkpointer import get_checkpointer, resolve_thread_id
 from src.config import CHAT_MODELS, DEFAULT_LOCALE, DEFAULT_MODEL, FALLBACK_MODEL
 from src.guard import check_guard
 from src.i18n import t
@@ -36,7 +37,26 @@ from src.tools.recommend_for_me import build_recommend_for_me_tool
 log = logging.getLogger(__name__)
 
 
+def _append_chat_log(existing: list | None, new: list | None) -> list:
+    """Reducer for the durable chat_log channel: append-only across turns.
+
+    With a checkpointer attached, channels with a reducer accumulate across
+    invocations on the same thread_id — this is the durable conversation
+    store that replaces st.session_state-only history (SPEC step 9).
+    """
+    return (existing or []) + (new or [])
+
+
 class AgentState(TypedDict, total=False):
+    # Durable conversation log — the ONLY channel with a reducer, so it is
+    # the only channel that accumulates across turns on a thread. Every
+    # other key is per-turn and simply overwritten. Entries mirror
+    # st.session_state.messages items, with sources flattened to dicts
+    # (src.checkpointer.serialize_chat_entry). Appended by app.py via
+    # append_chat_log() AFTER logging, so query_id is included and feedback
+    # buttons keep working on rehydrated history.
+    chat_log: Annotated[list[dict[str, Any]], _append_chat_log]
+
     # Turn input
     query:          str
     locale:         str
@@ -269,14 +289,16 @@ def retrieve_node(state: AgentState) -> dict[str, Any]:
         return {"rag_context": [], "filter_used": {}}
 
 
-def _tools_for_route(route: str, profile: dict[str, Any], disabled_tools: list[str] | None = None) -> list:
+def _tools_for_route(
+    route: str, profile: dict[str, Any], disabled_tools: list[str] | None = None, user_id: str | None = None
+) -> list:
     if route == "educate":
         # US-001 AC: educational turns must not trigger pair_with_food/filter_wines —
         # enforced structurally (no catalog tools available), not just by prompt wording.
         tools = [explain_wine_concept]
     elif route == "recommend":
         from src.agent import TOOLS
-        tools = TOOLS + [build_recommend_for_me_tool(profile)]
+        tools = TOOLS + [build_recommend_for_me_tool(profile, user_id=user_id)]
     elif route == "compare":
         # compare_wines handles side-by-side catalog comparisons (fuzzy-matches
         # titles, so grape names like "Malbec" resolve to catalog wines).
@@ -307,7 +329,8 @@ def agent_node(state: AgentState) -> dict[str, Any]:
         expertise_level=profile.get("expertise_level", "beginner"),
     )
     tools = _tools_for_route(
-        state.get("route") or "general", state.get("profile") or {}, state.get("disabled_tools")
+        state.get("route") or "general", state.get("profile") or {}, state.get("disabled_tools"),
+        user_id=state.get("user_id"),
     )
 
     model = state.get("model") or DEFAULT_MODEL
@@ -438,7 +461,11 @@ def build_graph():
     graph.add_edge("retrieve", "agent")
     graph.add_edge("agent", "extract_preferences")
     graph.add_edge("extract_preferences", END)
-    return graph.compile()
+    # Checkpointer (SPEC step 9): PostgresSaver when DATABASE_URL is set,
+    # MemorySaver otherwise. The retry->fallback loop inside agent_node is
+    # unaffected — the checkpointer wraps state persistence around the graph,
+    # not the LLM calls.
+    return graph.compile(checkpointer=get_checkpointer())
 
 
 _COMPILED_GRAPH = build_graph()
@@ -457,8 +484,14 @@ def run_via_graph(
     session_id: str,
     temperature: float = 0.2,
     disabled_tools: list[str] | None = None,
+    thread_id: str | None = None,
 ) -> dict[str, Any]:
-    """Invoke the compiled graph for one turn. Returns the final AgentState dict."""
+    """Invoke the compiled graph for one turn. Returns the final AgentState dict.
+
+    thread_id keys the checkpointer's durable state. When None it is derived
+    from user_id/session_id (resolve_thread_id): stable per user when logged
+    in, ephemeral per browser session when anonymous.
+    """
     initial_state: AgentState = {
         "query": query,
         "model": model,
@@ -472,4 +505,59 @@ def run_via_graph(
         "profile": profile,
         "session_id": session_id,
     }
-    return _COMPILED_GRAPH.invoke(initial_state, config={"recursion_limit": 25})
+    tid = thread_id or resolve_thread_id(user_id, session_id)
+    return _COMPILED_GRAPH.invoke(
+        initial_state,
+        config={"recursion_limit": 25, "configurable": {"thread_id": tid}},
+    )
+
+
+# ── Durable chat-log access (SPEC step 9) ────────────────────────────────────
+# All three helpers swallow exceptions (project convention: persistence never
+# blocks or breaks the chat reply). app.py is the only caller.
+
+
+def append_chat_log(thread_id: str, entries: list[dict[str, Any]]) -> bool:
+    """Append serialized chat entries to the thread's durable log.
+
+    Called by app.py after DB logging so entries carry query_id. Uses
+    update_state (not a graph node) because query_id only exists after
+    log_query() runs — outside the graph. The _append_chat_log reducer
+    turns this delta into an append.
+    """
+    try:
+        _COMPILED_GRAPH.update_state(
+            {"configurable": {"thread_id": thread_id}},
+            {"chat_log": entries},
+        )
+        return True
+    except Exception as exc:
+        log.warning("append_chat_log failed for thread %s: %s", thread_id, exc)
+        return False
+
+
+def get_thread_chat_log(thread_id: str) -> list[dict[str, Any]]:
+    """Read the persisted chat log for a thread ([] if none / on failure)."""
+    try:
+        snapshot = _COMPILED_GRAPH.get_state({"configurable": {"thread_id": thread_id}})
+        values = getattr(snapshot, "values", None) or {}
+        return list(values.get("chat_log") or [])
+    except Exception as exc:
+        log.warning("get_thread_chat_log failed for thread %s: %s", thread_id, exc)
+        return []
+
+
+def delete_thread(thread_id: str) -> bool:
+    """Erase a thread's durable conversation state.
+
+    GDPR hook (US-004): 'Forget everything about me' must now also clear the
+    persisted conversation, not just the user_preferences row — the sidebar's
+    forget-me handler should call this alongside delete_preferences().
+    """
+    try:
+        cp = get_checkpointer()
+        cp.delete_thread(thread_id)
+        return True
+    except Exception as exc:
+        log.warning("delete_thread failed for thread %s: %s", thread_id, exc)
+        return False

@@ -1,6 +1,7 @@
 """VinoSage — Streamlit entrypoint."""
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 
@@ -59,11 +60,14 @@ for _k, _v in _DEFAULTS.items():
 
 # ── Imports deferred so page_config executes before any st call ───────────────
 from src.agent import run_agent  # noqa: E402
+from src.checkpointer import rehydrate_chat_entry, resolve_thread_id, serialize_chat_entry  # noqa: E402
 from src.config import CHAT_MODELS, INDEPTH_MODEL, QUICK_MODEL  # noqa: E402
+from src.graph import append_chat_log, get_thread_chat_log  # noqa: E402
 from src.logging_db import log_query, log_token_usage, log_tool_calls  # noqa: E402
 from src.preferences import get_preferences  # noqa: E402
 from src.rag import retrieve  # noqa: E402
 from src.ratelimit import check_cost_cap, check_rate_limit  # noqa: E402
+from src.transcribe import transcribe_audio  # noqa: E402
 from src.ui.admin import render_admin  # noqa: E402
 from src.ui.auth_view import is_age_gate_passed, render_age_gate  # noqa: E402
 from src.ui.chat_view import (  # noqa: E402
@@ -84,6 +88,10 @@ _HIST_FOOD_KWS = {
     "shrimp","shrimps","oyster","oysters","sushi","pasta","pizza","risotto",
     "mushroom","mushrooms","truffle","truffles",
     "cheese","salad","barbecue","curry","spicy","tagine","casserole","meat",
+    "pudding","puddings","mousse","fondue","brownie","brownies","tart","tarts",
+    "bread","brioche","flatbread","noodle","noodles","dumpling","dumplings",
+    "prawn","prawns","crab","squid","octopus","scallop","scallops",
+    "quail","pheasant","burger","soup","stew","chilli","chili","tapas",
 }
 
 
@@ -221,6 +229,21 @@ def main() -> None:
     locale     = st.session_state.locale
     session_id = st.session_state.session_id
 
+    # ── Durable conversation thread (SPEC step 9) ─────────────────────────────
+    # Logged-in users get a stable thread keyed by user_id, so their chat log
+    # survives browser refreshes and server restarts; anonymous users get a
+    # per-browser-session thread (ephemeral by construction — new uuid each
+    # session). Rehydration runs once per Streamlit session and only when the
+    # in-memory chat is empty, so it never clobbers an ongoing conversation
+    # (e.g. a user who logs in mid-chat keeps what's on screen).
+    _auth_now = _current_user()
+    thread_id = resolve_thread_id(_auth_now.get("user_id") if _auth_now else None, session_id)
+    if _auth_now and not st.session_state.messages and not st.session_state.get("_chat_rehydrated"):
+        st.session_state["_chat_rehydrated"] = True
+        _persisted = get_thread_chat_log(thread_id)
+        if _persisted:
+            st.session_state.messages = [rehydrate_chat_entry(m) for m in _persisted]
+
     # Quick/In-depth is the only model choice end users ever see (SPEC §5.6).
     # A dev panel selection (admin-only) overrides it for the rest of the
     # session; the override lives in its own session key so it survives
@@ -242,6 +265,36 @@ def main() -> None:
     # st.chat_input at module level → Streamlit fixes it at the bottom of the page.
     # Inside a container it would render inline (wrong position).
     chat_input = st.chat_input(t("chat_placeholder", locale))
+
+    # ── Voice input (Phase 3, step 4) ──────────────────────────────────────────
+    # st.audio_input keeps returning the SAME recording on every rerun, so we
+    # fingerprint it and transcribe each recording exactly once. The rate limit
+    # is checked BEFORE transcription: it is the throttle protecting the paid
+    # STT endpoint (a voice turn therefore consumes 2 window slots — one here,
+    # one in the normal prompt pre-flight; 10/min → up to 5 voice turns/min).
+    voice_prompt: str | None = None
+    with st.popover(f"🎤 {t('voice_input_label', locale)}"):
+        _audio = st.audio_input(t("voice_record_label", locale), key="voice_recorder")
+    if _audio is not None:
+        _digest = hashlib.sha256(_audio.getvalue()).hexdigest()
+        if st.session_state.get("_last_voice_digest") != _digest:
+            _rl_voice = check_rate_limit(session_id)
+            if not _rl_voice.allowed:
+                st.warning(t("error_rate_limit", locale))
+            else:
+                st.session_state["_last_voice_digest"] = _digest
+                with st.spinner(t("voice_transcribing", locale)):
+                    _res = transcribe_audio(
+                        _audio.getvalue(),
+                        filename=getattr(_audio, "name", None) or "voice.wav",
+                        locale=locale,
+                    )
+                if _res.get("error"):
+                    st.toast(t("voice_error", locale), icon="⚠️")
+                elif not _res["text"]:
+                    st.toast(t("voice_empty", locale), icon="🎤")
+                else:
+                    voice_prompt = _res["text"]
 
     # ── Layout: chat + optional admin tab ────────────────────────────────────
     if st.session_state.admin_unlocked:
@@ -266,7 +319,7 @@ def main() -> None:
         # Render welcome screen into a clearable placeholder so we can erase it
         # the moment a button is clicked — before the agent status widget appears.
         queued: str | None = None
-        if not messages and not chat_input:
+        if not messages and not chat_input and not voice_prompt:
             welcome_slot = st.empty()
             with welcome_slot.container():
                 render_empty_state(locale)
@@ -277,7 +330,7 @@ def main() -> None:
                 st.session_state.queued_prompt = None
                 welcome_slot.empty()  # remove buttons before agent output appears
 
-        prompt = chat_input or queued
+        prompt = chat_input or queued or voice_prompt
 
         if prompt:
             # ── Pre-flight guards ─────────────────────────────────────────────
@@ -379,6 +432,7 @@ def main() -> None:
                         session_id=session_id,
                         temperature=temperature,
                         disabled_tools=disabled_tools,
+                        thread_id=thread_id,
                     )
                     step2.caption(f"✓ {t('step_think', locale)}")
 
@@ -436,7 +490,7 @@ def main() -> None:
 
             # Persist assistant turn (query_id lets historical re-renders show
             # feedback buttons too — see render_chat_history).
-            st.session_state.messages.append({
+            assistant_entry = {
                 "role": "assistant",
                 "content": result.answer,
                 "sources": result.retrieved_wines,
@@ -444,7 +498,19 @@ def main() -> None:
                 "filter_used": result.filter_used,
                 "user_query": prompt,
                 "query_id": query_id,
-            })
+            }
+            st.session_state.messages.append(assistant_entry)
+
+            # Durable persistence (SPEC step 9): logged-in users only — the
+            # anonymous thread is ephemeral, and writing it would just leave
+            # unreachable rows behind. Appended AFTER log_query so query_id is
+            # included and feedback buttons work on rehydrated history.
+            # append_chat_log swallows failures (persistence never blocks chat).
+            if auth:
+                append_chat_log(thread_id, [
+                    serialize_chat_entry({"role": "user", "content": prompt}),
+                    serialize_chat_entry(assistant_entry),
+                ])
 
             # Rerun so the sidebar re-renders with updated metrics.
             # Flag triggers auto-scroll in the next render after the rerun.

@@ -174,6 +174,8 @@ def render_taste_profile(locale: str) -> None:
             col_yes, col_cancel = st.columns(2)
             if col_yes.button(t("forget_me_yes", locale), key="forget_me_yes_btn", type="primary"):
                 if delete_preferences(user_id):
+                    from src.graph import delete_thread
+                    delete_thread(f"user:{user_id}")   # erase durable conversation too (US-004)
                     st.session_state.pop("_prefs_cache", None)
                     st.success(t("profile_deleted", locale))
                     st.rerun()

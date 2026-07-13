@@ -34,6 +34,10 @@ def render_admin(locale: str) -> None:
     _render_user_stats(locale)
     st.divider()
 
+    st.subheader(t("admin_feedback_header", locale))
+    _render_feedback_insights(locale)
+    st.divider()
+
     st.subheader(t("admin_security_header", locale))
     _render_security_events(locale)
     st.divider()
@@ -258,6 +262,62 @@ def _render_user_stats(locale: str) -> None:
         )
     except Exception as exc:
         st.error(f"Per-user stats unavailable: {exc}")
+
+
+def _render_feedback_insights(locale: str) -> None:
+    """Phase 3, step 5 — №2 (per-wine feedback: a purchasing signal) and
+    №4 (acceptance rate: continuous online quality metric, complementing the
+    offline Ragas evals). Read-only aggregates; the math lives in
+    src.feedback_insights so it's unit-testable without Streamlit or a DB."""
+    try:
+        from src.feedback_insights import feedback_aggregates
+
+        db = get_service_db()
+        fb = (
+            db.table("recommendation_feedback")
+            .select("wine_id, wine_title, rating, query_id, created_at")
+            .order("created_at", desc=True)
+            .limit(5000)
+            .execute()
+        )
+        if not fb.data:
+            st.caption(t("analytics_no_data", locale))
+            return
+
+        qids = list({r["query_id"] for r in fb.data if r.get("query_id")})
+        ql_rows: list[dict] = []
+        for i in range(0, len(qids), _BATCH_SIZE):
+            batch = qids[i : i + _BATCH_SIZE]
+            ql = db.table("query_logs").select("id, model, locale").in_("id", batch).execute()
+            ql_rows.extend(ql.data)
+
+        agg = feedback_aggregates(fb.data, ql_rows)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric(t("feedback_ratings_total", locale), agg["total_up"] + agg["total_down"])
+        acc = agg["overall_acceptance"]
+        col2.metric(t("feedback_acceptance_label", locale), f"{acc:.0%}" if acc is not None else "—")
+        col3.metric("👍 / 👎", f"{agg['total_up']} / {agg['total_down']}")
+
+        if len(agg["trend"]) > 1:
+            st.markdown(f"**{t('feedback_trend_label', locale)}**")
+            st.line_chart(agg["trend"])
+
+        st.markdown(f"**{t('feedback_by_wine_label', locale)}**")
+        st.dataframe(agg["per_wine"], use_container_width=True)
+
+        bcol1, bcol2 = st.columns(2)
+        with bcol1:
+            if not agg["by_model"].empty:
+                st.markdown(f"**{t('feedback_breakdown_model', locale)}**")
+                st.dataframe(agg["by_model"], use_container_width=True)
+        with bcol2:
+            if not agg["by_locale"].empty:
+                st.markdown(f"**{t('feedback_breakdown_locale', locale)}**")
+                st.dataframe(agg["by_locale"], use_container_width=True)
+
+    except Exception as exc:
+        st.error(f"Feedback insights unavailable: {exc}")
 
 
 def _render_security_events(locale: str) -> None:

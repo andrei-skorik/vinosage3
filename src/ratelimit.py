@@ -14,8 +14,30 @@ from src.config import DAILY_COST_CAP_MICROS, RATE_LIMIT_PER_MIN
 
 _WINDOW_S = 60.0
 
+# Stale-session cleanup (memory-leak fix): _windows previously grew without
+# bound — one deque per session_id, never removed. A long-lived deployment
+# accumulates an entry for every browser session ever seen. The sweep below
+# runs at most once per _CLEANUP_INTERVAL_S, inside the same lock as the
+# window check, and drops every session whose newest timestamp has aged out
+# of the rate window (its deque can never influence a future decision).
+# Bound after fix: |_windows| <= sessions active in the last
+# (_WINDOW_S + _CLEANUP_INTERVAL_S) seconds.
+_CLEANUP_INTERVAL_S = 300.0
+
 _windows: dict[str, deque[float]] = {}
 _lock = Lock()
+_last_cleanup: float = 0.0
+
+
+def _purge_stale_sessions(now: float) -> None:
+    """Drop sessions whose entire window has expired. Caller holds _lock."""
+    global _last_cleanup
+    if now - _last_cleanup < _CLEANUP_INTERVAL_S:
+        return
+    _last_cleanup = now
+    stale = [sid for sid, q in _windows.items() if not q or now - q[-1] > _WINDOW_S]
+    for sid in stale:
+        del _windows[sid]
 
 
 class RateLimitResult(NamedTuple):
@@ -28,6 +50,7 @@ def check_rate_limit(session_id: str) -> RateLimitResult:
     """Sliding-window check: max RATE_LIMIT_PER_MIN requests per 60 s."""
     now = time.time()
     with _lock:
+        _purge_stale_sessions(now)
         q = _windows.setdefault(session_id, deque())
         while q and now - q[0] > _WINDOW_S:
             q.popleft()

@@ -87,3 +87,9 @@ LANGSMITH_API_KEY: Final  = os.getenv("LANGSMITH_API_KEY", "")
 LANGSMITH_PROJECT: Final  = os.getenv("LANGSMITH_PROJECT", "")
 LANGSMITH_ENDPOINT: Final = os.getenv("LANGSMITH_ENDPOINT", "")
 LANGSMITH_ENABLED: Final  = bool(LANGSMITH_API_KEY) and LANGSMITH_TRACING.strip().lower() == "true"
+
+# ── Voice input (Phase 3, step 4) ─────────────────────────────────────────────
+# Speech-to-text via OpenRouter's /audio/transcriptions endpoint — same base
+# URL and API key as chat/embeddings, no new secret. Whisper Large V3 Turbo:
+# cheapest adequate option, covers all four locales (en/de/ru/fi).
+TRANSCRIBE_MODEL: Final = os.getenv("TRANSCRIBE_MODEL", "whisper-large-v3-turbo")

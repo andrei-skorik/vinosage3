@@ -6,6 +6,13 @@ langchain-core==1.4.2
 langchain-openai==1.2.2
 langchain-community==0.4.2
 langgraph==1.2.4
+# Durable conversation state (SPEC step 9): PostgresSaver on Supabase.
+# psycopg[binary] avoids needing libpq headers on Streamlit Cloud.
+# NOTE: floors, not exact pins — after `pip install`, freeze the resolved
+# versions here to match the project's pinning convention.
+langgraph-checkpoint-postgres==3.1.0
+psycopg[binary]==3.3.4
+psycopg-pool==3.3.1
 
 # Observability (optional at runtime — see LANGSMITH_* in .env.example)
 langsmith==0.8.10
