@@ -109,37 +109,96 @@ the new tools log anything).
 | LangSmith via env vars only, no `_require` | Tracing degrades gracefully — a missing key never crashes the app |
 | `ragas` in `requirements-eval.txt`, not `requirements.txt` | Requires MS C++ Build Tools on Windows; optional eval-only dependency |
 
+---
+
+## What's new in Phase 3
+
+Five independent hardening/feature steps on top of v2.0 — durable memory, a
+production reliability fix, a defense-in-depth repair, a new input modality,
+and a smarter recommendation loop.
+
+| Capability | Detail |
+|------------|--------|
+| **Durable conversation memory** | LangGraph `PostgresSaver` checkpointer (`src/checkpointer.py`) persists each logged-in user's chat log on Supabase Postgres, keyed by `thread_id = "user:{user_id}"`. Conversations survive browser refresh and server restarts. Anonymous users get an ephemeral `"anon:{session_id}"` thread by construction. `DATABASE_URL` absent or Postgres down → transparent fallback to an in-process `MemorySaver`, same behaviour as before this step. "Forget everything about me" now also erases the durable thread (`delete_thread`). |
+| **Voice input** | Speak a question instead of typing: `st.audio_input` → Whisper Large V3 Turbo via OpenRouter's `/audio/transcriptions` endpoint (`src/transcribe.py`) — same API key, no new secret. The transcript is treated as pure data: it flows through the identical rate-limit → cost-cap → guard → router → agent pipeline as typed text, with no bypass. |
+| **Feedback-aware recommendations** | `recommend_for_me` now excludes any wine the user currently has an active 👎 on, even if it matches every other profile dimension (`src/preferences.py::get_downrated_wine_ids`). If the user's own rejections are the *only* reason nothing matches, the agent says so honestly (`all_downrated`) instead of the misleading "nothing matches your taste." |
+| **Admin feedback insights** | New admin-panel section: per-wine 👍/👎 counts + down-share (a purchasing signal for the shop) and an overall acceptance rate with a trend-by-date chart and breakdowns by model/locale — a free, continuous quality signal alongside the offline Ragas evals (`src/feedback_insights.py`). |
+| **Rate-limit memory-leak fix** | `src/ratelimit.py`'s in-memory sliding-window dict used to grow one entry per browser session forever. A lazy periodic sweep now purges any session whose window has fully expired, bounding memory on long-lived deployments — with zero change to allow/block semantics. |
+| **Anti-hallucination defense-in-depth repair** | The triple food-keyword defense (three deliberately independent copies, one per layer) had quietly drifted apart over time — 30 dishes (prawn, crab, soup, stew, scallop, …) were recognised by the catalog tool but not by the two evidence-filter layers or the router. Fixed and locked behind a sync test that fails the build on any future drift. |
+| **198 total unit tests** | +47 new tests across the five steps (checkpointer, rate-limit, keyword-sync, transcription, feedback exclusion/insights), all mocked — no real DB/LLM/audio calls required to run the suite. |
+
+### New environment variables (Phase 3, all optional)
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | Supabase Postgres **Session pooler** connection string. Enables durable chat history; absent → in-memory only, app behaves exactly as before. |
+| `TRANSCRIBE_MODEL` | Speech-to-text model override (default: `whisper-large-v3-turbo`). |
+
+One-time setup for durable memory (run once, after setting `DATABASE_URL`):
+
+```bash
+python scripts/setup_checkpointer.py
+```
+
+This creates the LangGraph-managed `checkpoints` / `checkpoint_blobs` /
+`checkpoint_writes` / `checkpoint_migrations` tables. It is intentionally
+**not** a numbered `sql/` file — those tables are versioned by the
+`langgraph-checkpoint-postgres` library itself, not by this project's schema.
+No other Phase 3 step added or changed any SQL (`sql/01`–`09` untouched).
 
 ---
 
 ## Architecture
 
+Current end-to-end pipeline (v2.0 `StateGraph` + all five Phase 3 additions):
+
 ```
-User (Streamlit UI)
+User (Streamlit UI)  ──► typed text ─┐
+                     ──► 🎤 voice ────┼──► transcribe.py (Whisper via OpenRouter,
+                                      │     transcript enters the pipeline as
+                                      │     plain text — no bypass)
+                                      ▼
+  app.py  ──► rate_limit.py (sliding window, leak-free) ──► cost_cap: €1/day
        │
+       ├──► checkpointer.py  (PostgresSaver — durable per-user thread,
+       │      MemorySaver fallback when DATABASE_URL is absent)
        ▼
-  app.py  ──► rate_limit.py ──► guard: 10 req/min, €1/day cap
-       │
-       ▼
-  agent.py  ──► LangGraph tool-calling agent (OpenRouter LLM)
+  graph.py  ──► LangGraph StateGraph
        │              │
-       │              ├── filter_wines      (hard constraints)
-       │              ├── pair_with_food    (dish → wine type)
-       │              ├── calculate_budget  (N bottles / €budget)
-       │              ├── compare_wines     (fuzzy name match)
-       │              └── wine_stats        (aggregates)
-       │
-       ▼
-   rag.py  ──► multi-query translation + self-query filter + RRF fusion
+       │         guard_node          (injection detection → security_events)
+       │              │
+       │         load_preferences    (reads user_preferences from Supabase)
+       │              │
+       │         router              (educate / recommend / compare / general)
+       │              │
+       │         retrieve (conditional — skipped for educate route)
+       │              │
+       │         agent_node  ◄──────────────────────────────────────────┐
+       │              │                                                  │
+       │              ├── filter_wines        (hard catalog constraints) │
+       │              ├── pair_with_food      (dish → catalog pairings)  │
+       │              ├── calculate_budget    (N bottles / €budget)      │
+       │              ├── compare_wines       (fuzzy name match)         │
+       │              ├── wine_stats          (aggregates)               │
+       │              ├── explain_wine_concept (Wikipedia REST)          │
+       │              └── recommend_for_me    (profile-conditioned,     ─┘
+       │                                        excludes 👎-rated wines)
+       │              │
+       │         extract_preferences  (detects taste signals → upserts profile)
        │
        ▼
   Supabase pgvector  ──► match_wines() RPC (HNSW cosine similarity)
        │
        ▼
-  logging_db.py  ──► query_logs / tool_call_logs / token_usage
+  logging_db.py  ──► query_logs / tool_call_logs / token_usage /
+                     recommendation_feedback / security_events
+       │
+       ▼
+  Admin panel  ──► feedback_insights.py (per-wine 👍/👎, acceptance rate,
+                     trend, model/locale breakdowns)
 ```
 
-**Stack:** Python 3.14 · Streamlit · LangChain 1.x + LangGraph · OpenRouter · Supabase pgvector · Pydantic v2 · rapidfuzz
+**Stack:** Python 3.14 · Streamlit · LangChain 1.x + LangGraph (`langgraph-checkpoint-postgres`) · OpenRouter (chat, embeddings, Whisper STT) · Supabase (pgvector + Postgres checkpointer) · Pydantic v2 · rapidfuzz
 
 ---
 
@@ -256,7 +315,10 @@ pytest -m "integration or not integration"
 
 Full eval suite (Ragas): `pip install -r requirements-eval.txt` (Linux/CI only; requires build tools on Windows).
 
-Unit tests cover all 5 tools + RAG components + i18n — 69 tests, ~5 s.
+Unit tests cover all 7 tools, RAG, i18n, the guard, taste-profile/preferences
+logic, the durable checkpointer, rate limiting, food-keyword sync, voice
+transcription, and feedback exclusion/insights — 198 tests, ~10-15 s, all
+mocked (no real DB/LLM/audio calls needed).
 Integration eval tests (US-001..011 + 8 edge cases) are excluded by default.
 
 ---
@@ -278,11 +340,17 @@ OPENROUTER_MODEL     = "anthropic/claude-haiku-4.5"
 EMBEDDING_MODEL      = "openai/text-embedding-3-small"
 RATE_LIMIT_PER_MIN   = "10"
 DAILY_COST_CAP_EUR   = "1.00"
+
+# Optional (Phase 3) — omit either and the app degrades gracefully
+DATABASE_URL         = "postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+TRANSCRIBE_MODEL     = "whisper-large-v3-turbo"
 ```
 
 5. Click **Deploy**.
+6. If you set `DATABASE_URL`, run `python scripts/setup_checkpointer.py` once
+   (locally, pointed at the same database) to create the checkpointer tables.
 
-Streamlit Cloud sets these as environment variables, which `src/config.py` reads via `os.getenv()`.
+Streamlit Cloud sets these as environment variables, which `src/config.py` (and `src/checkpointer.py`/`src/transcribe.py` via `os.getenv`) read at runtime.
 
 ---
 
@@ -315,29 +383,45 @@ vinosage/
 │   ├── embeddings.py         # OpenRouter embeddings + reconcile
 │   ├── rag.py                # Multi-query + RRF retrieval
 │   ├── llm.py                # LLM factory (OpenRouter via LangChain)
-│   ├── agent.py              # LangGraph tool-calling agent
+│   ├── agent.py              # System prompt, message building, retry helpers
+│   ├── graph.py               # LangGraph StateGraph (guard→prefs→router→agent→extract)
+│   ├── guard.py                # Prompt/memory-injection detection
+│   ├── preferences.py          # Taste-profile read/write + feedback fold + exclusion
+│   ├── checkpointer.py         # PostgresSaver / MemorySaver durable chat memory (Phase 3)
+│   ├── transcribe.py           # Whisper STT via OpenRouter (Phase 3)
+│   ├── feedback_insights.py    # Pure aggregation for admin feedback panel (Phase 3)
 │   ├── i18n.py               # t(key, locale) translation helper
-│   ├── ratelimit.py          # Sliding-window rate limit + cost cap
+│   ├── ratelimit.py          # Sliding-window rate limit + cost cap (leak-free)
 │   ├── logging_db.py         # Observability writes to Supabase
-│   └── tools/
-│       ├── filter_wines.py
-│       ├── pair_with_food.py
-│       ├── calculate_budget.py
-│       ├── compare_wines.py
-│       └── wine_stats.py
+│   ├── tools/
+│   │   ├── filter_wines.py
+│   │   ├── pair_with_food.py
+│   │   ├── calculate_budget.py
+│   │   ├── compare_wines.py
+│   │   ├── wine_stats.py
+│   │   ├── explain_wine_concept.py   # Wikipedia-backed education tool
+│   │   └── recommend_for_me.py        # Profile-conditioned, excludes 👎-rated wines
 │   └── ui/
 │       ├── chat_view.py
 │       ├── sidebar.py
-│       └── admin.py
+│       ├── auth_view.py
+│       └── admin.py                   # Includes per-wine feedback + acceptance-rate insights
 │
 ├── scripts/
 │   ├── apply_sql.py          # Apply SQL migrations via Management API
-│   └── seed.py               # Full catalog sync + embed
+│   ├── seed.py               # Full catalog sync + embed
+│   └── setup_checkpointer.py  # One-time durable-memory table setup (Phase 3, human-run)
 │
 ├── sql/
 │   ├── 01_schema.sql
 │   ├── 02_rls.sql
-│   └── 03_functions_triggers.sql
+│   ├── 03_functions_triggers.sql
+│   ├── 04_auth.sql
+│   ├── 05_query_history.sql
+│   ├── 06_preferences.sql
+│   ├── 07_security_events.sql
+│   ├── 08_feedback.sql
+│   └── 09_tool_logs_extend.sql
 │
 ├── locales/
 │   ├── en.json
@@ -356,6 +440,17 @@ vinosage/
 │   ├── test_compare_wines.py
 │   ├── test_wine_stats.py
 │   ├── test_rag.py
+│   ├── test_guard.py
+│   ├── test_preferences.py
+│   ├── test_recommend_for_me.py
+│   ├── test_explain_wine_concept.py
+│   ├── test_routing.py
+│   ├── test_expertise.py
+│   ├── test_checkpointer.py       # Phase 3 step 1
+│   ├── test_ratelimit.py          # Phase 3 step 2
+│   ├── test_food_kws_sync.py      # Phase 3 step 3
+│   ├── test_transcribe.py         # Phase 3 step 4
+│   ├── test_step5_feedback.py     # Phase 3 step 5
 │   └── eval/
 │       └── test_agent_eval.py  # integration, requires real API
 │
@@ -376,3 +471,7 @@ vinosage/
 | `precomputed_rag` param | Allows splitting retrieval from agent call for UI progress steps |
 | Service role for all writes | RLS enforces read-only on chat path; admin writes audited |
 | Logging never blocks chat | All `logging_db` calls swallow exceptions |
+| `DATABASE_URL` / checkpointer via `os.getenv`, never `_require` | Durable memory is an enhancement, not a dependency — Postgres outage degrades to `MemorySaver`, chat still works |
+| Thread ID = `user:{user_id}` / `anon:{session_id}` | Stable across refresh/restart for logged-in users; anonymous threads are ephemeral by construction, no separate code path needed |
+| Feedback exclusion narrows, never invents | `recommend_for_me` only removes 👎-rated wines from the candidate set — grounding guarantee holds even as personalisation deepens |
+| Three independent food-keyword copies + a sync test | Anti-hallucination defense-in-depth is deliberately not shared/merged across layers; the test (not code review) is what keeps them from drifting apart again |
