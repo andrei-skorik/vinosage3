@@ -25,6 +25,7 @@
   "feedback_up": "Hyvä valinta",
   "feedback_down": "Ei minulle",
   "feedback_saved": "Kiitos palautteesta!",
+  "feedback_login_hint": "Kirjaudu sisään arvioidaksesi suosituksia.",
   "searching_for_label": "Haetaan:",
   "tool_no_pairing": "Ei luettelossa vahvistettua paria kohteelle \"{dish}\"",
   "tool_pairing_found": "\"{dish}\" → {count} viini(ä): {titles}",

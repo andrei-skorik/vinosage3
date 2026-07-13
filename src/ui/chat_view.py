@@ -180,6 +180,61 @@ def _recommended_wines_for_feedback(
     return wines
 
 
+def _toggle_feedback(
+    wine: dict[str, Any],
+    direction: str,
+    *,
+    ratings: dict[str, str | None],
+    user_id: str | None,
+    session_id: str,
+    query_id: str | None,
+    locale: str,
+    fold_cache: Any = None,
+) -> None:
+    """Persist (or clear) one wine's rating (US-005).
+
+    Extracted from render_feedback_buttons' render loop so it is unit-testable
+    without a Streamlit context (Phase 3 step 6, gap #1) — pure refactor, zero
+    behavior change. Anonymous users (user_id=None) write nothing to the DB —
+    log_feedback, fold_feedback, and delete_feedback are all gated on user_id
+    (Phase 3 step 6b): with no user_id, recommendation_feedback's
+    unique(user_id, query_id, wine_id) can't deduplicate NULL-user rows
+    (Postgres NULL != NULL), so anonymous re-taps would insert duplicates and
+    skew the admin feedback-insights analytics (SPEC Appendix B; CLAUDE.md:
+    "anonymous users never write preferences/feedback to the DB"). The UI
+    layer (render_feedback_buttons) hides these buttons entirely for
+    anonymous users; this gate is defense-in-depth behind that.
+    """
+    from src.logging_db import log_feedback, delete_feedback
+    from src.preferences import fold_feedback
+
+    wine_id = str(wine.get("wine_id", ""))
+    if ratings.get(wine_id) == direction:
+        ratings[wine_id] = None
+        if user_id:
+            delete_feedback(user_id=user_id, wine_id=wine_id)
+            fold_feedback(user_id, wine, "none")
+            if fold_cache:
+                fold_cache(wine, "none")
+        return
+    ratings[wine_id] = direction
+    if not user_id:
+        return
+    ok = log_feedback(
+        session_id=session_id,
+        query_id=query_id,
+        wine_id=wine.get("wine_id"),
+        wine_title=wine.get("title"),
+        rating=direction,
+        user_id=user_id,
+    )
+    if ok:
+        fold_feedback(user_id, wine, direction)
+        if fold_cache:
+            fold_cache(wine, direction)
+        st.toast(t("feedback_saved", locale))
+
+
 def render_feedback_buttons(
     tool_calls: list[dict[str, Any]],
     query_id: str | None,
@@ -208,13 +263,21 @@ def render_feedback_buttons(
     if not wines:
         return
 
-    from src.logging_db import log_feedback, get_latest_ratings, delete_feedback
-    from src.preferences import fold_feedback
+    from src.logging_db import get_latest_ratings
     import streamlit.components.v1 as components
 
     session_id = st.session_state.get("session_id", "")
     auth = st.session_state.get("auth")
     user_id = auth.get("user_id") if auth else None
+
+    # Anonymous users never write feedback to the DB (Phase 3 step 6b — see
+    # _toggle_feedback's docstring for the NULL-dedup rationale). Hiding the
+    # buttons entirely, rather than rendering them and letting the gate in
+    # _toggle_feedback silently no-op, avoids a UI that looks broken (a click
+    # with no visible effect and no toast).
+    if not user_id:
+        st.caption(t("feedback_login_hint", locale))
+        return
 
     if "wine_ratings" not in st.session_state:
         st.session_state["wine_ratings"] = {}
@@ -283,28 +346,11 @@ def render_feedback_buttons(
         st.session_state["_pending_profile_update"] = p
 
     def _toggle(wine: dict[str, Any], direction: str) -> None:
-        wine_id = str(wine.get("wine_id", ""))
-        if ratings.get(wine_id) == direction:
-            ratings[wine_id] = None
-            if user_id:
-                delete_feedback(user_id=user_id, wine_id=wine_id)
-                fold_feedback(user_id, wine, "none")
-                _fold_cache(wine, "none")
-            return
-        ratings[wine_id] = direction
-        ok = log_feedback(
-            session_id=session_id,
-            query_id=query_id,
-            wine_id=wine.get("wine_id"),
-            wine_title=wine.get("title"),
-            rating=direction,
-            user_id=user_id,
+        _toggle_feedback(
+            wine, direction,
+            ratings=ratings, user_id=user_id, session_id=session_id,
+            query_id=query_id, locale=locale, fold_cache=_fold_cache,
         )
-        if ok:
-            if user_id:
-                fold_feedback(user_id, wine, direction)
-                _fold_cache(wine, direction)
-            st.toast(t("feedback_saved", locale))
 
     # color_map: active marker → CSS colour (absent = reset to default).
     # mines:     ALL markers for THIS message's wines — scopes the JS so it

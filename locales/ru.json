@@ -25,6 +25,7 @@
   "feedback_up": "Хороший выбор",
   "feedback_down": "Не для меня",
   "feedback_saved": "Спасибо за отзыв!",
+  "feedback_login_hint": "Войдите, чтобы оценивать рекомендации.",
   "searching_for_label": "Ищу:",
   "tool_no_pairing": "В каталоге нет подтверждённого сочетания для «{dish}»",
   "tool_pairing_found": "«{dish}» → {count} вин(о/а): {titles}",

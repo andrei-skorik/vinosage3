@@ -25,6 +25,7 @@
   "feedback_up": "Good pick",
   "feedback_down": "Not for me",
   "feedback_saved": "Thanks for the feedback!",
+  "feedback_login_hint": "Log in to rate recommendations.",
   "searching_for_label": "Searching for:",
   "tool_no_pairing": "No catalog-confirmed pairing for \"{dish}\"",
   "tool_pairing_found": "\"{dish}\" → {count} wine(s): {titles}",
