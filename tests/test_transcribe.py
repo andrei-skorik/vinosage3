@@ -87,6 +87,27 @@ def test_empty_transcript_is_success_not_error(monkeypatch):
     assert res["text"] == ""
 
 
+def test_punctuation_only_transcript_normalized_to_empty(monkeypatch):
+    """The real smoke-test case: Whisper returned '.' on silence."""
+    monkeypatch.setattr(
+        tr.httpx, "post",
+        lambda *a, **k: _Resp({"text": " . ", "usage": {"seconds": 1}}),
+    )
+    res = tr.transcribe_audio(b"x")
+    assert "error" not in res
+    assert res["text"] == ""
+
+
+def test_real_words_are_not_normalized_away(monkeypatch):
+    """Guard the guard: single-word and Cyrillic transcripts must survive."""
+    for text in ("Merlot?", "да"):
+        monkeypatch.setattr(
+            tr.httpx, "post",
+            lambda *a, _t=text, **k: _Resp({"text": _t}),
+        )
+        assert tr.transcribe_audio(b"x")["text"] == text
+
+
 # ── Retry -> failure paths ────────────────────────────────────────────────────
 
 

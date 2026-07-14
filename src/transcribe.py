@@ -23,6 +23,7 @@ throttle (app.py checks it BEFORE transcribing).
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -100,6 +101,15 @@ def transcribe_audio(
             resp.raise_for_status()
             payload = resp.json()
             text = (payload.get("text") or "").strip()
+            # Whisper hallucinates filler on silent/near-silent audio
+            # ("." / "…" / "Thank you."). A transcript with no letters or
+            # digits carries no query content — normalize it to empty so the
+            # UI shows the "couldn't hear anything" toast instead of burning
+            # an LLM turn on punctuation. (Plausible-word hallucinations like
+            # "Thank you." are indistinguishable from real speech and are
+            # accepted as-is — known limitation.)
+            if not re.search(r"\w", text):
+                text = ""
             usage = payload.get("usage") or {}
             return {"text": text, "model": TRANSCRIBE_MODEL, "seconds": usage.get("seconds")}
         except Exception as exc:
