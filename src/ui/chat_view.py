@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import random
+import re
 from typing import Any
 
 import streamlit as st
@@ -127,20 +128,45 @@ def _format_tool_result(tool_name: str, result: Any, locale: str) -> str:
     return str(result)
 
 
+# Typographic-to-ASCII normalization map (Phase 3, step 6g). LLMs routinely
+# rewrite curly quotes, long dashes, and non-breaking spaces as their plain
+# ASCII forms, so an exact substring match between a catalog title and the
+# model's reply silently fails for any wine whose title contains typography
+# (the 'White Ash' incident: catalog stores curly quotes, the LLM emitted
+# straight ones, and the wine lost its feedback buttons).
+_TYPOGRAPHY = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "‛": "'",  # ' ' ‚ ‛
+    "′": "'", "´": "'", "`": "'",                        # ′ ´ `
+    "“": '"', "”": '"', "„": '"', "‟": '"',  # " " „ ‟
+    "–": "-", "—": "-", "−": "-",                  # – — −
+    " ": " ",                                                  # nbsp
+})
+
+
+def _normalize_for_match(s: str) -> str:
+    """Casefold + typography-to-ASCII + whitespace collapse, for robust
+    title-in-text matching. Deterministic; no fuzzy matching needed."""
+    s = s.translate(_TYPOGRAPHY)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip().lower()
+
+
 def _title_in_response(title: str, response_text: str) -> bool:
     """True if the wine's brand+variety name appears in the LLM response.
 
     Strips the vintage year and region (after the first comma) before matching
     so that "Whale Cove Sauvignon Blanc 2021/22, South Africa" matches the
     response text "Whale Cove Sauvignon Blanc" regardless of formatting.
+    Both sides are typography-normalized (see _normalize_for_match): the
+    catalog stores curly quotes ('White Ash') while LLMs emit straight ones
+    ('White Ash'), and a raw substring check breaks on exactly that.
     """
-    import re as _re
-    clean = _re.sub(r",.*$", "", title)                          # drop region
-    clean = _re.sub(r"\s+\d{4}(?:/\d{2,4})?$", "", clean)      # drop vintage
-    clean = clean.strip()
+    clean = re.sub(r",.*$", "", title)                          # drop region
+    clean = re.sub(r"\s+\d{4}(?:/\d{2,4})?$", "", clean)      # drop vintage
+    clean = _normalize_for_match(clean)
     if not clean:
         return True
-    return clean.lower() in response_text.lower()
+    return clean in _normalize_for_match(response_text)
 
 
 def _recommended_wines_for_feedback(
