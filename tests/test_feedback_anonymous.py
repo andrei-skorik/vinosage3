@@ -88,14 +88,18 @@ def test_anonymous_toggle_off_never_calls_delete_or_fold(monkeypatch):
 
 
 def test_authenticated_user_calls_log_feedback_and_fold_feedback(monkeypatch):
+    """No prior rating -> no reason lookup needed; fold_feedback is called
+    for the new rating and its returned delta is recorded via log_feedback's
+    reason (Phase 3 step 6h)."""
     calls: dict = {"log": None, "fold": None}
 
     def _log(**kwargs):
         calls["log"] = kwargs
         return True
 
-    def _fold(user_id, wine, rating):
-        calls["fold"] = (user_id, wine, rating)
+    def _fold(user_id, wine, rating, *, delta=None):
+        calls["fold"] = (user_id, wine, rating, delta)
+        return {"preferred_types": ["Red"]}, {"added_preferred_types": ["Red"]}
 
     monkeypatch.setattr("src.logging_db.log_feedback", _log)
     monkeypatch.setattr("src.preferences.fold_feedback", _fold)
@@ -111,20 +115,26 @@ def test_authenticated_user_calls_log_feedback_and_fold_feedback(monkeypatch):
     assert calls["log"]["user_id"] == "user-42"
     assert calls["log"]["rating"] == "up"
     assert calls["log"]["wine_id"] == "w-1"
-    assert calls["fold"] == ("user-42", wine, "up")
+    assert calls["log"]["reason"] == '{"added_preferred_types": ["Red"]}'
+    assert calls["fold"] == ("user-42", wine, "up", None)
     assert ratings["w-1"] == "up"
 
 
 def test_authenticated_toggle_off_calls_delete_and_fold_none(monkeypatch):
+    """Toggle-off reads the row's recorded delta and reverts exactly that
+    (Phase 3 step 6h) — never a blanket removal — then deletes the row."""
     calls: dict = {"delete": None, "fold": None}
+    recorded_delta = {"added_disliked_styles": ["Ripe & Rounded"]}
 
     def _delete(**kwargs):
         calls["delete"] = kwargs
 
-    def _fold(user_id, wine, rating):
-        calls["fold"] = (user_id, wine, rating)
+    def _fold(user_id, wine, rating, *, delta=None):
+        calls["fold"] = (user_id, wine, rating, delta)
+        return None, {}
 
     monkeypatch.setattr("src.logging_db.delete_feedback", _delete)
+    monkeypatch.setattr("src.logging_db.get_feedback_reason", lambda **k: recorded_delta)
     monkeypatch.setattr("src.preferences.fold_feedback", _fold)
 
     wine = _make_wine()
@@ -136,7 +146,7 @@ def test_authenticated_toggle_off_calls_delete_and_fold_none(monkeypatch):
 
     assert ratings["w-1"] is None
     assert calls["delete"] == {"user_id": "user-42", "wine_id": "w-1"}
-    assert calls["fold"] == ("user-42", wine, "none")
+    assert calls["fold"] == ("user-42", wine, "none", recorded_delta)
 
 
 # ── UI layer: anonymous users see no buttons at all (step 6b, edit 1b) ──────

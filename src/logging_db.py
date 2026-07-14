@@ -165,6 +165,40 @@ def delete_feedback(*, user_id: str, wine_id: str) -> None:
         log.warning("delete_feedback failed: %s", exc)
 
 
+def get_feedback_reason(*, user_id: str, query_id: str | None, wine_id: str) -> dict[str, Any] | None:
+    """Read the fold-delta provenance recorded in this exact
+    (user_id, query_id, wine_id) row's `reason` column (Phase 3 step 6h).
+
+    Returns the parsed delta dict, or None if the row/reason is missing,
+    NULL, or unparseable. Callers MUST treat None as "revert nothing" — the
+    only safe default for a row that predates this feature (legacy) or was
+    never actually folded (e.g. a 👎 whose value was already preferred, so
+    the fold itself applied nothing — see fold_feedback).
+    """
+    if not query_id:
+        return None
+    try:
+        resp = (
+            _db()
+            .table("recommendation_feedback")
+            .select("reason")
+            .eq("user_id", user_id)
+            .eq("query_id", query_id)
+            .eq("wine_id", wine_id)
+            .limit(1)
+            .execute()
+        )
+        if not resp.data:
+            return None
+        raw = resp.data[0].get("reason")
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception as exc:
+        log.warning("get_feedback_reason failed: %s", exc)
+        return None
+
+
 def get_latest_ratings(user_id: str) -> dict[str, str]:
     """Return {wine_id: rating} for the user's most recent rating per wine.
 

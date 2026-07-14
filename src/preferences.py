@@ -98,11 +98,30 @@ def delete_preferences(user_id: str) -> bool:
         return False
 
 
-def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, Any] | None:
-    """Fold a 👍 / 👎 / toggle-off into the taste profile (SPEC §5.4).
+# ── Fold delta provenance (Phase 3 step 6h) ───────────────────────────────────
+# A fold's delta is the sparse set of (bucket, value) pairs it actually
+# changed, keyed "added_<field>" / "removed_<field>" (e.g.
+# {"added_disliked_styles": ["Ripe & Rounded"]}). It is serialized into
+# recommendation_feedback.reason (sql/08, previously unused — no schema
+# change) so a later toggle-off can revert EXACTLY what the fold did, instead
+# of the old design's blanket "remove from both buckets" (which destroyed
+# manually-set preferences whenever the fold itself had added nothing).
 
-    rating == "up"   → add type/grape/style to preferred_*;
-                        remove them from disliked_* (user changed mind).
+_FOLD_FIELD_SETS = (
+    "preferred_types", "preferred_grapes", "preferred_styles",
+    "disliked_types", "disliked_grapes", "disliked_styles",
+)
+
+
+def _compute_and_apply_fold(
+    pt: set, pg: set, ps: set, dt: set, dg: set, ds: set,
+    wine: dict[str, Any], rating: str,
+) -> dict[str, list[str]]:
+    """Apply a 👍/👎 fold (SPEC §5.4) to the six bucket sets in place;
+    return the sparse delta of what actually changed.
+
+    rating == "up"   → add type/grape/style to preferred_*; remove them from
+                        disliked_* (user changed mind).
     rating == "down" → add grape/style to disliked_* ONLY IF the value is not
                         already in the matching preferred_* array — an
                         explicit positive preference wins over a single 👎.
@@ -110,12 +129,99 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, 
                         Phase 3 step 6f; the previous "move" semantics
                         violated SPEC §5.4 whenever the disliked value
                         happened to already be preferred).
-    rating == "none" → toggle-off: remove type/grape/style from BOTH buckets.
 
-    A 👍 always wins immediately (adds to preferred, clears from disliked).
-    A 👎 only ever adds to disliked, and only when there is no standing
-    preferred value to override — no attribute can be pushed into both
-    buckets, but a preferred value can never be silently erased by a dislike.
+    Shared by fold_feedback (DB truth) and chat_view._fold_profile_dict (the
+    instant sidebar mirror) — a single implementation, not two to keep in
+    sync (Phase 3 step 6h unification).
+    """
+    wine_type, wine_grape, wine_style = wine.get("type"), wine.get("grape"), wine.get("style")
+    delta: dict[str, list[str]] = {}
+
+    def _record(key: str, value: str) -> None:
+        delta.setdefault(key, []).append(value)
+
+    # Quadruples: (value, preferred_set, preferred_field, disliked_set, disliked_field)
+    quads = [
+        (wine_type,  pt, "preferred_types",  dt, "disliked_types"),
+        (wine_grape, pg, "preferred_grapes", dg, "disliked_grapes"),
+        (wine_style, ps, "preferred_styles", ds, "disliked_styles"),
+    ]
+
+    if rating == "up":
+        for value, pref, pref_field, dislike, dislike_field in quads:
+            if not value or not isinstance(value, str):
+                continue
+            if value not in pref:
+                pref.add(value)
+                _record(f"added_{pref_field}", value)
+            if value in dislike:
+                dislike.discard(value)
+                _record(f"removed_{dislike_field}", value)
+    elif rating == "down":
+        for value, pref, pref_field, dislike, dislike_field in quads:
+            if not value or not isinstance(value, str):
+                continue
+            # type is excluded from disliked per SPEC §5.4
+            if dislike_field == "disliked_types":
+                continue
+            # An explicit positive preference wins over a single 👎: never
+            # add to disliked_*, and never touch preferred_*, when the value
+            # is already preferred.
+            if value in pref:
+                continue
+            if value not in dislike:
+                dislike.add(value)
+                _record(f"added_{dislike_field}", value)
+
+    return delta
+
+
+def _revert_fold_delta(pt: set, pg: set, ps: set, dt: set, dg: set, ds: set, delta: dict[str, list[str]]) -> None:
+    """Undo exactly the changes recorded in `delta` (Phase 3 step 6h) —
+    the exact inverse of _compute_and_apply_fold, not a blanket removal."""
+    field_sets = {
+        "preferred_types": pt, "preferred_grapes": pg, "preferred_styles": ps,
+        "disliked_types": dt, "disliked_grapes": dg, "disliked_styles": ds,
+    }
+    for key, values in (delta or {}).items():
+        if key.startswith("added_"):
+            target = field_sets.get(key[len("added_"):])
+            if target is not None:
+                for v in values:
+                    target.discard(v)
+        elif key.startswith("removed_"):
+            target = field_sets.get(key[len("removed_"):])
+            if target is not None:
+                for v in values:
+                    target.add(v)
+
+
+def fold_feedback(
+    user_id: str,
+    wine: dict[str, Any],
+    rating: str,
+    *,
+    delta: dict[str, list[str]] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, list[str]]]:
+    """Fold a 👍 / 👎 / toggle-off into the taste profile (SPEC §5.4).
+
+    rating == "up" / "down" → compute and apply the guarded delta (see
+        _compute_and_apply_fold); the delta actually applied is returned so
+        the caller can record it as provenance (recommendation_feedback.reason)
+        for a later exact revert.
+    rating == "none" → toggle-off: revert EXACTLY the delta passed in via
+        `delta` (read by the caller from the row's recorded reason) — never a
+        blanket "remove from both buckets" (Phase 3 step 6h; that older
+        design destroyed manually-set preferences whenever the original fold
+        had added nothing, e.g. a 👎 on a wine whose grape+style were already
+        preferred). Missing/legacy/unparseable `delta` (falsy) → revert
+        NOTHING, the safe default — the wine-id exclusion lift from deleting
+        the feedback row is the primary effect in that case.
+
+    Returns (updated_profile_or_None, delta_applied). delta_applied is the
+    newly-applied delta for "up"/"down" (possibly {} if nothing changed,
+    e.g. a 👎 whose only value was already preferred), and always {} for
+    "none" (a revert has nothing new to record — the row is being deleted).
 
     Reads/writes via the service-role client (not authed RLS path) because
     this is an internal mutation, not a user data-read.  Failure is logged,
@@ -126,7 +232,7 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, 
         profile = resp.data[0] if resp.data else dict(EMPTY_PROFILE)
     except Exception as exc:
         log.warning("fold_feedback read failed: %s", exc)
-        return
+        return None, {}
 
     preferred_types = set(profile.get("preferred_types") or [])
     preferred_grapes = set(profile.get("preferred_grapes") or [])
@@ -135,55 +241,25 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, 
     disliked_grapes = set(profile.get("disliked_grapes") or [])
     disliked_styles = set(profile.get("disliked_styles") or [])
 
-    wine_type, wine_grape, wine_style = wine.get("type"), wine.get("grape"), wine.get("style")
-    changed = False
-
-    # Triples: (value, preferred_bucket, disliked_bucket)
-    triples = [
-        (wine_type,  preferred_types,  disliked_types),
-        (wine_grape, preferred_grapes, disliked_grapes),
-        (wine_style, preferred_styles, disliked_styles),
-    ]
-
-    if rating == "up":
-        for value, pref, dislike in triples:
-            if not value or not isinstance(value, str):
-                continue
-            if value not in pref:
-                pref.add(value)
-                changed = True
-            if value in dislike:
-                dislike.discard(value)
-                changed = True
-    elif rating == "down":
-        for value, pref, dislike in triples:
-            if not value or not isinstance(value, str):
-                continue
-            # type is excluded from disliked per SPEC §5.4
-            if dislike is disliked_types:
-                continue
-            # SPEC §5.4: add to disliked_* ONLY IF not already in preferred_*
-            # — an explicit positive preference wins over a single 👎. Never
-            # remove anything from preferred_* on a 👎.
-            if value in pref:
-                continue
-            if value not in dislike:
-                dislike.add(value)
-                changed = True
+    if rating in ("up", "down"):
+        applied = _compute_and_apply_fold(
+            preferred_types, preferred_grapes, preferred_styles,
+            disliked_types, disliked_grapes, disliked_styles,
+            wine, rating,
+        )
+        if not applied:
+            return None, {}
     elif rating == "none":
-        # Toggle-off: remove from both buckets unconditionally
-        for value, pref, dislike in triples:
-            if not value or not isinstance(value, str):
-                continue
-            if value in pref:
-                pref.discard(value)
-                changed = True
-            if value in dislike:
-                dislike.discard(value)
-                changed = True
-
-    if not changed:
-        return None
+        if not delta:
+            return None, {}
+        _revert_fold_delta(
+            preferred_types, preferred_grapes, preferred_styles,
+            disliked_types, disliked_grapes, disliked_styles,
+            delta,
+        )
+        applied = {}
+    else:
+        return None, {}
 
     updated: dict[str, Any] = {
         **profile,
@@ -217,7 +293,7 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, 
         max_price_eur_cents=updated["max_price_eur_cents"],
         notes=updated["notes"],
     )
-    return updated
+    return updated, applied
 
 
 # ── Feedback exclusion (Phase 3, step 5 / №1) ─────────────────────────────────

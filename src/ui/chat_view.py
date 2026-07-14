@@ -206,16 +206,29 @@ def _recommended_wines_for_feedback(
     return wines
 
 
-def _fold_profile_dict(profile: dict[str, Any], wine: dict[str, Any], direction: str) -> dict[str, Any]:
-    """Mirror fold_feedback's logic (SPEC §5.4) onto a plain profile dict.
+def _fold_profile_dict(
+    profile: dict[str, Any],
+    wine: dict[str, Any],
+    direction: str,
+    delta: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """Mirror fold_feedback's logic (SPEC §5.4 + Phase 3 step 6h provenance)
+    onto a plain profile dict.
 
-    Extracted from _fold_cache's closure so it is unit-testable directly and
-    so its behavior can be checked for parity against fold_feedback (Phase 3
-    step 6f) — pure refactor, zero behavior change.
+    Extracted from _fold_cache's closure so it is unit-testable directly.
+    Unified (step 6h) with fold_feedback's own pure math — this calls the
+    SAME _compute_and_apply_fold / _revert_fold_delta functions preferences.py
+    uses, instead of maintaining a second copy that can silently drift out of
+    sync (which is exactly what happened before step 6f's parity test).
+
+    direction == "up" / "down": computes and applies its own fresh delta from
+    `wine`'s attributes (identical math to fold_feedback given the same
+    starting profile).
+    direction == "none": reverts EXACTLY the `delta` passed in (the caller
+    reads it from the row's recorded reason) — never a blanket removal.
+    Falsy/missing `delta` means "revert nothing", the safe default.
     """
-    wtype  = wine.get("type")
-    wgrape = wine.get("grape")
-    wstyle = wine.get("style")
+    from src.preferences import _compute_and_apply_fold, _revert_fold_delta
 
     p: dict[str, Any] = dict(profile)
     pt  = set(p.get("preferred_types")  or [])
@@ -225,19 +238,10 @@ def _fold_profile_dict(profile: dict[str, Any], wine: dict[str, Any], direction:
     dg  = set(p.get("disliked_grapes")  or [])
     ds  = set(p.get("disliked_styles")  or [])
 
-    if direction == "up":
-        if wtype:  pt.add(wtype);  dt.discard(wtype)
-        if wgrape: pg.add(wgrape); dg.discard(wgrape)
-        if wstyle: ps.add(wstyle); ds.discard(wstyle)
-    elif direction == "down":
-        # SPEC §5.4 (fixed in Phase 3 step 6f): add to disliked_* ONLY IF
-        # not already in preferred_* — a positive preference wins over a
-        # single 👎. Never remove anything from preferred_* here.
-        if wgrape and wgrape not in pg: dg.add(wgrape)
-        if wstyle and wstyle not in ps: ds.add(wstyle)
-    elif direction == "none":
-        for v, a, b in [(wtype, pt, dt), (wgrape, pg, dg), (wstyle, ps, ds)]:
-            if v: a.discard(v); b.discard(v)
+    if direction in ("up", "down"):
+        _compute_and_apply_fold(pt, pg, ps, dt, dg, ds, wine, direction)
+    elif direction == "none" and delta:
+        _revert_fold_delta(pt, pg, ps, dt, dg, ds, delta)
 
     p.update({
         "preferred_types":  sorted(pt),
@@ -274,22 +278,49 @@ def _toggle_feedback(
     "anonymous users never write preferences/feedback to the DB"). The UI
     layer (render_feedback_buttons) hides these buttons entirely for
     anonymous users; this gate is defense-in-depth behind that.
+
+    Un-fold is the exact inverse of fold, not a blanket wipe (Phase 3 step
+    6h): every applied fold's delta is serialized into the feedback row's
+    `reason` column, and a toggle-off (or a rating flip) reverts EXACTLY
+    that delta — read back via get_feedback_reason — before the row is
+    deleted (toggle-off) or the new rating's fold is applied (flip). A
+    missing/legacy/unparseable reason reverts nothing, the safe default.
     """
-    from src.logging_db import log_feedback, delete_feedback
+    from src.logging_db import delete_feedback, get_feedback_reason, log_feedback
     from src.preferences import fold_feedback
 
     wine_id = str(wine.get("wine_id", ""))
-    if ratings.get(wine_id) == direction:
+    previous = ratings.get(wine_id)
+
+    if previous == direction:
+        # Toggle off: revert exactly what the active fold recorded, then
+        # delete the row (delete_feedback removes ALL rows for this wine,
+        # matching its existing no-query_id-scoped behavior).
         ratings[wine_id] = None
         if user_id:
+            reason = get_feedback_reason(user_id=user_id, query_id=query_id, wine_id=wine_id)
+            fold_feedback(user_id, wine, "none", delta=reason)
             delete_feedback(user_id=user_id, wine_id=wine_id)
-            fold_feedback(user_id, wine, "none")
             if fold_cache:
-                fold_cache(wine, "none")
+                fold_cache(wine, "none", delta=reason)
         return
+
+    # Flipping from an active opposite rating (down->up or up->down): revert
+    # the outgoing rating's recorded delta FIRST, so the profile never holds
+    # more than one active fold per (user, wine) at a time. Read the reason
+    # before log_feedback's upsert below overwrites this same row.
+    if user_id and previous:
+        prior_reason = get_feedback_reason(user_id=user_id, query_id=query_id, wine_id=wine_id)
+        if prior_reason:
+            fold_feedback(user_id, wine, "none", delta=prior_reason)
+            if fold_cache:
+                fold_cache(wine, "none", delta=prior_reason)
+
     ratings[wine_id] = direction
     if not user_id:
         return
+
+    _, applied_delta = fold_feedback(user_id, wine, direction)
     ok = log_feedback(
         session_id=session_id,
         query_id=query_id,
@@ -297,9 +328,9 @@ def _toggle_feedback(
         wine_title=wine.get("title"),
         rating=direction,
         user_id=user_id,
+        reason=json.dumps(applied_delta),
     )
     if ok:
-        fold_feedback(user_id, wine, direction)
         if fold_cache:
             fold_cache(wine, direction)
         st.toast(t("feedback_saved", locale))
@@ -362,7 +393,7 @@ def render_feedback_buttons(
         ratings.update(loaded)
         st.session_state["wine_ratings_loaded"] = True
 
-    def _fold_cache(wine: dict[str, Any], direction: str) -> None:
+    def _fold_cache(wine: dict[str, Any], direction: str, delta: dict[str, list[str]] | None = None) -> None:
         """Mirror fold_feedback's logic onto _prefs_cache in-place.
 
         fold_feedback() already wrote the change to Supabase; this function
@@ -371,12 +402,14 @@ def render_feedback_buttons(
         next rerun — no extra DB round-trip needed.  Then the multiselect
         widget keys are popped so Streamlit re-initialises them from the
         updated cache (widgets ignore `default` when their key already
-        exists in session_state).
+        exists in session_state). `delta` is forwarded for direction="none"
+        reverts (Phase 3 step 6h) — ignored for "up"/"down", which compute
+        their own fresh delta from `wine`.
         """
         cache = st.session_state.get("_prefs_cache")
         if not cache:
             return
-        p = _fold_profile_dict(cache, wine, direction)
+        p = _fold_profile_dict(cache, wine, direction, delta=delta)
         # Store as a pending update.  The sidebar's render_taste_profile() reads
         # this key at the TOP of its execution — before any multiselect renders —
         # and applies it to both _prefs_cache and the widget keys.  Setting widget
