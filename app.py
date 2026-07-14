@@ -272,9 +272,21 @@ def main() -> None:
     # is checked BEFORE transcription: it is the throttle protecting the paid
     # STT endpoint (a voice turn therefore consumes 2 window slots — one here,
     # one in the normal prompt pre-flight; 10/min → up to 5 voice turns/min).
+    #
+    # Widget-key rotation (Phase 3, step 6d): once a recording is CONSUMED
+    # (transcribed — whether it produced text, silence, or an error), we bump
+    # the generation counter so the next rerun mounts a fresh empty recorder.
+    # Without this, st.audio_input keeps referencing the consumed upload and
+    # renders "An error has occurred" until manually reset. NOT rotated on
+    # the rate-limit branch — there the recording was NOT consumed and the
+    # user may retry it after the window.
     voice_prompt: str | None = None
+    _voice_gen = st.session_state.setdefault("_voice_widget_gen", 0)
     with st.popover(f"🎤 {t('voice_input_label', locale)}"):
-        _audio = st.audio_input(t("voice_record_label", locale), key="voice_recorder")
+        _audio = st.audio_input(
+            t("voice_record_label", locale),
+            key=f"voice_recorder_{_voice_gen}",
+        )
     if _audio is not None:
         _digest = hashlib.sha256(_audio.getvalue()).hexdigest()
         if st.session_state.get("_last_voice_digest") != _digest:
@@ -283,6 +295,7 @@ def main() -> None:
                 st.warning(t("error_rate_limit", locale))
             else:
                 st.session_state["_last_voice_digest"] = _digest
+                st.session_state["_voice_widget_gen"] = _voice_gen + 1
                 with st.spinner(t("voice_transcribing", locale)):
                     _res = transcribe_audio(
                         _audio.getvalue(),
