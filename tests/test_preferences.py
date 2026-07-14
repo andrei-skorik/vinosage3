@@ -61,28 +61,35 @@ class TestDetectPreferenceSignals:
         assert second == {}
 
 
+def _mock_db_returning(profile: dict) -> MagicMock:
+    mock_resp = MagicMock()
+    mock_resp.data = [profile]
+    mock_table = MagicMock()
+    mock_table.select.return_value = mock_table
+    mock_table.eq.return_value = mock_table
+    mock_table.limit.return_value = mock_table
+    mock_table.execute.return_value = mock_resp
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+    return mock_db
+
+
 class TestFoldFeedback:
-    def test_down_vote_moves_grape_from_preferred_to_disliked(self):
-        """Flipping from 👍 to 👎 must remove the attribute from preferred_*
-        AND add it to disliked_* — user explicitly changed their mind."""
+    def test_down_vote_on_preferred_grape_leaves_it_preferred_not_disliked(self):
+        """SPEC §5.4: an explicit positive preference wins over a single 👎.
+        Regression for the Assyrtiko incident (Phase 3 step 6f) — a 👎 must
+        NEVER move a value out of preferred_* into disliked_*. The wine's
+        style, which was NOT preferred, is legitimately folded into
+        disliked_styles — same incident, correct half of the behavior."""
         existing_profile = {
             "expertise_level": "beginner",
-            "preferred_types": [], "preferred_grapes": ["Malbec"], "preferred_countries": [],
+            "preferred_types": [], "preferred_grapes": ["Assyrtiko"], "preferred_countries": [],
             "preferred_regions": [], "preferred_styles": [], "preferred_characteristics": [],
             "disliked_types": [], "disliked_grapes": [], "disliked_styles": [],
             "min_price_eur_cents": None, "max_price_eur_cents": None, "notes": None,
         }
-        mock_resp = MagicMock()
-        mock_resp.data = [existing_profile]
-        mock_table = MagicMock()
-        mock_table.select.return_value = mock_table
-        mock_table.eq.return_value = mock_table
-        mock_table.limit.return_value = mock_table
-        mock_table.execute.return_value = mock_resp
-        mock_db = MagicMock()
-        mock_db.table.return_value = mock_table
-
-        wine = {"type": "Red", "grape": "Malbec", "style": "Rich & Juicy"}
+        mock_db = _mock_db_returning(existing_profile)
+        wine = {"type": "White", "grape": "Assyrtiko", "style": "Crisp & Zesty"}
 
         with patch("src.preferences.get_service_db", return_value=mock_db), \
              patch("src.preferences.upsert_preferences") as mock_upsert:
@@ -91,13 +98,58 @@ class TestFoldFeedback:
 
         mock_upsert.assert_called_once()
         kwargs = mock_upsert.call_args.kwargs
-        # Malbec moves out of preferred and into disliked
-        assert "Malbec" not in kwargs["preferred_grapes"]
-        assert "Malbec" in kwargs["disliked_grapes"]
-        # Style also lands in disliked
-        assert "Rich & Juicy" in kwargs["disliked_styles"]
+        # Assyrtiko stays preferred — never removed by a 👎.
+        assert "Assyrtiko" in kwargs["preferred_grapes"]
+        assert "Assyrtiko" not in kwargs["disliked_grapes"]
+        # Style was not preferred, so it legitimately lands in disliked.
+        assert "Crisp & Zesty" in kwargs["disliked_styles"]
         # Type is excluded from disliked per SPEC §5.4
+        assert "White" not in kwargs["disliked_types"]
+
+    def test_down_vote_with_no_preferred_overlap_folds_into_disliked(self):
+        """No standing preference on grape/style -> both fold into
+        disliked_* as before (the non-conflicting, ordinary case)."""
+        empty_profile = {
+            "expertise_level": "beginner",
+            "preferred_types": [], "preferred_grapes": [], "preferred_countries": [],
+            "preferred_regions": [], "preferred_styles": [], "preferred_characteristics": [],
+            "disliked_types": [], "disliked_grapes": [], "disliked_styles": [],
+            "min_price_eur_cents": None, "max_price_eur_cents": None, "notes": None,
+        }
+        mock_db = _mock_db_returning(empty_profile)
+        wine = {"type": "Red", "grape": "Malbec", "style": "Rich & Juicy"}
+
+        with patch("src.preferences.get_service_db", return_value=mock_db), \
+             patch("src.preferences.upsert_preferences") as mock_upsert:
+            from src.preferences import fold_feedback
+            fold_feedback("user-1", wine, "down")
+
+        kwargs = mock_upsert.call_args.kwargs
+        assert "Malbec" in kwargs["disliked_grapes"]
+        assert "Rich & Juicy" in kwargs["disliked_styles"]
         assert "Red" not in kwargs["disliked_types"]
+
+    def test_up_vote_on_disliked_grape_moves_it_into_preferred(self):
+        """A fresh explicit 👍 beats a stored dislike: the grape is removed
+        from disliked_grapes and added to preferred_grapes."""
+        existing_profile = {
+            "expertise_level": "beginner",
+            "preferred_types": [], "preferred_grapes": [], "preferred_countries": [],
+            "preferred_regions": [], "preferred_styles": [], "preferred_characteristics": [],
+            "disliked_types": [], "disliked_grapes": ["Assyrtiko"], "disliked_styles": [],
+            "min_price_eur_cents": None, "max_price_eur_cents": None, "notes": None,
+        }
+        mock_db = _mock_db_returning(existing_profile)
+        wine = {"type": "White", "grape": "Assyrtiko", "style": "Crisp & Zesty"}
+
+        with patch("src.preferences.get_service_db", return_value=mock_db), \
+             patch("src.preferences.upsert_preferences") as mock_upsert:
+            from src.preferences import fold_feedback
+            fold_feedback("user-1", wine, "up")
+
+        kwargs = mock_upsert.call_args.kwargs
+        assert "Assyrtiko" in kwargs["preferred_grapes"]
+        assert "Assyrtiko" not in kwargs["disliked_grapes"]
 
     def test_up_vote_adds_type_grape_style_to_preferred(self):
         empty_profile = {

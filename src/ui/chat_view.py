@@ -180,6 +180,50 @@ def _recommended_wines_for_feedback(
     return wines
 
 
+def _fold_profile_dict(profile: dict[str, Any], wine: dict[str, Any], direction: str) -> dict[str, Any]:
+    """Mirror fold_feedback's logic (SPEC §5.4) onto a plain profile dict.
+
+    Extracted from _fold_cache's closure so it is unit-testable directly and
+    so its behavior can be checked for parity against fold_feedback (Phase 3
+    step 6f) — pure refactor, zero behavior change.
+    """
+    wtype  = wine.get("type")
+    wgrape = wine.get("grape")
+    wstyle = wine.get("style")
+
+    p: dict[str, Any] = dict(profile)
+    pt  = set(p.get("preferred_types")  or [])
+    pg  = set(p.get("preferred_grapes") or [])
+    ps  = set(p.get("preferred_styles") or [])
+    dt  = set(p.get("disliked_types")   or [])
+    dg  = set(p.get("disliked_grapes")  or [])
+    ds  = set(p.get("disliked_styles")  or [])
+
+    if direction == "up":
+        if wtype:  pt.add(wtype);  dt.discard(wtype)
+        if wgrape: pg.add(wgrape); dg.discard(wgrape)
+        if wstyle: ps.add(wstyle); ds.discard(wstyle)
+    elif direction == "down":
+        # SPEC §5.4 (fixed in Phase 3 step 6f): add to disliked_* ONLY IF
+        # not already in preferred_* — a positive preference wins over a
+        # single 👎. Never remove anything from preferred_* here.
+        if wgrape and wgrape not in pg: dg.add(wgrape)
+        if wstyle and wstyle not in ps: ds.add(wstyle)
+    elif direction == "none":
+        for v, a, b in [(wtype, pt, dt), (wgrape, pg, dg), (wstyle, ps, ds)]:
+            if v: a.discard(v); b.discard(v)
+
+    p.update({
+        "preferred_types":  sorted(pt),
+        "preferred_grapes": sorted(pg),
+        "preferred_styles": sorted(ps),
+        "disliked_types":   sorted(dt),
+        "disliked_grapes":  sorted(dg),
+        "disliked_styles":  sorted(ds),
+    })
+    return p
+
+
 def _toggle_feedback(
     wine: dict[str, Any],
     direction: str,
@@ -296,47 +340,17 @@ def render_feedback_buttons(
         """Mirror fold_feedback's logic onto _prefs_cache in-place.
 
         fold_feedback() already wrote the change to Supabase; this function
-        applies the same mutation to the cached profile dict so the sidebar
-        reflects the new preference on the very next rerun — no extra DB
-        round-trip needed.  Then the multiselect widget keys are popped so
-        Streamlit re-initialises them from the updated cache (widgets ignore
-        `default` when their key already exists in session_state).
+        applies the same mutation (via _fold_profile_dict) to the cached
+        profile dict so the sidebar reflects the new preference on the very
+        next rerun — no extra DB round-trip needed.  Then the multiselect
+        widget keys are popped so Streamlit re-initialises them from the
+        updated cache (widgets ignore `default` when their key already
+        exists in session_state).
         """
         cache = st.session_state.get("_prefs_cache")
         if not cache:
             return
-
-        wtype  = wine.get("type")
-        wgrape = wine.get("grape")
-        wstyle = wine.get("style")
-
-        p: dict[str, Any] = dict(cache)
-        pt  = set(p.get("preferred_types")  or [])
-        pg  = set(p.get("preferred_grapes") or [])
-        ps  = set(p.get("preferred_styles") or [])
-        dt  = set(p.get("disliked_types")   or [])
-        dg  = set(p.get("disliked_grapes")  or [])
-        ds  = set(p.get("disliked_styles")  or [])
-
-        if direction == "up":
-            if wtype:  pt.add(wtype);  dt.discard(wtype)
-            if wgrape: pg.add(wgrape); dg.discard(wgrape)
-            if wstyle: ps.add(wstyle); ds.discard(wstyle)
-        elif direction == "down":
-            if wgrape: pg.discard(wgrape); dg.add(wgrape)
-            if wstyle: ps.discard(wstyle); ds.add(wstyle)
-        elif direction == "none":
-            for v, a, b in [(wtype, pt, dt), (wgrape, pg, dg), (wstyle, ps, ds)]:
-                if v: a.discard(v); b.discard(v)
-
-        p.update({
-            "preferred_types":  sorted(pt),
-            "preferred_grapes": sorted(pg),
-            "preferred_styles": sorted(ps),
-            "disliked_types":   sorted(dt),
-            "disliked_grapes":  sorted(dg),
-            "disliked_styles":  sorted(ds),
-        })
+        p = _fold_profile_dict(cache, wine, direction)
         # Store as a pending update.  The sidebar's render_taste_profile() reads
         # this key at the TOP of its execution — before any multiselect renders —
         # and applies it to both _prefs_cache and the widget keys.  Setting widget

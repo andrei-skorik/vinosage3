@@ -103,13 +103,19 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, 
 
     rating == "up"   → add type/grape/style to preferred_*;
                         remove them from disliked_* (user changed mind).
-    rating == "down" → add grape/style to disliked_*;
-                        remove them from preferred_* (user changed mind).
+    rating == "down" → add grape/style to disliked_* ONLY IF the value is not
+                        already in the matching preferred_* array — an
+                        explicit positive preference wins over a single 👎.
+                        Never removes anything from preferred_* (fixed in
+                        Phase 3 step 6f; the previous "move" semantics
+                        violated SPEC §5.4 whenever the disliked value
+                        happened to already be preferred).
     rating == "none" → toggle-off: remove type/grape/style from BOTH buckets.
 
-    Bidirectional updates ensure that flipping a rating always produces a
-    consistent profile: no attribute can live in both preferred_* and
-    disliked_* simultaneously.
+    A 👍 always wins immediately (adds to preferred, clears from disliked).
+    A 👎 only ever adds to disliked, and only when there is no standing
+    preferred value to override — no attribute can be pushed into both
+    buckets, but a preferred value can never be silently erased by a dislike.
 
     Reads/writes via the service-role client (not authed RLS path) because
     this is an internal mutation, not a user data-read.  Failure is logged,
@@ -156,9 +162,11 @@ def fold_feedback(user_id: str, wine: dict[str, Any], rating: str) -> dict[str, 
             # type is excluded from disliked per SPEC §5.4
             if dislike is disliked_types:
                 continue
+            # SPEC §5.4: add to disliked_* ONLY IF not already in preferred_*
+            # — an explicit positive preference wins over a single 👎. Never
+            # remove anything from preferred_* on a 👎.
             if value in pref:
-                pref.discard(value)
-                changed = True
+                continue
             if value not in dislike:
                 dislike.add(value)
                 changed = True
