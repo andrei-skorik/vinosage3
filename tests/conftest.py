@@ -1,6 +1,15 @@
 """Shared fixtures for VinoSage tests."""
 from __future__ import annotations
 
+import os
+
+# Tests must never create real LangSmith traces — src/config.py's
+# LANGSMITH_TRACING is read straight from the environment, and python-dotenv
+# doesn't override an already-set var, so setting this here (before any
+# project module runs load_dotenv()) wins over whatever a local .env says.
+# Tracing is for the live app, not CI/local test runs.
+os.environ["LANGSMITH_TRACING"] = "false"
+
 import pandas as pd
 import pytest
 
