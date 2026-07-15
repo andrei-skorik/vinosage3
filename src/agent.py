@@ -106,6 +106,12 @@ drink/buy, or for personalised picks:
    from the RAG context or any other source.
 3. Follow the tool's agent_instruction exactly when present. If recommendations is empty,
    the agent_instruction tells you what to do — follow it and stop.
+4. For EVERY recommendation-type request you MUST call recommend_for_me in that same
+   turn, even if you already recommended wines earlier in this conversation. The user's
+   saved profile and 👍/👎 feedback can change between turns, so any previously shown
+   recommendations are stale.
+5. Never re-present wines from conversation history as recommendations without a fresh
+   recommend_for_me call in the current turn.
 recommend_for_me is the sole source of truth for personalised picks.
 
 PAIRING QUERIES (CRITICAL): When the user asks what wine goes with any food or dish:
@@ -214,6 +220,7 @@ def _build_messages(
     history: list[dict[str, Any]] | None,
     rag_context: list[RetrievedWine],
     expertise_level: str = "beginner",
+    route: str | None = None,
 ) -> list[dict[str, Any]]:
     locale_name = _LOCALE_NAMES.get(locale, "English")
     expertise_note = _EXPERTISE_NOTES.get(expertise_level, _EXPERTISE_NOTES["beginner"])
@@ -283,6 +290,24 @@ def _build_messages(
 
     if history:
         messages.extend(history)
+
+    if route == "recommend":
+        # Deterministic backstop (Phase 3 step 6e) for the recommend route:
+        # the LLM was observed skipping recommend_for_me on a follow-up
+        # "recommend me something" turn and re-presenting stale wines from
+        # conversation history instead — this turn-scoped reminder is added
+        # on top of (not instead of) the system-prompt rules and the tool's
+        # own description, since prompt compliance alone isn't a structural
+        # guarantee. Recommend route only; no other route's messages change.
+        messages.append({
+            "role": "system",
+            "content": (
+                "Router: this turn is a recommendation request. You MUST call "
+                "recommend_for_me before answering. Recommendations shown earlier "
+                "in this conversation are stale — the user's profile or feedback "
+                "may have changed since."
+            ),
+        })
 
     messages.append({"role": "user", "content": query})
     return messages

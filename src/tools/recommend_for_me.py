@@ -316,6 +316,14 @@ def _build(profile: dict[str, Any], occasion: str | None, max_price_eur: float |
             "profile_used": profile_used,
             "recommendations": recommendations,
             "count": len(recommendations),
+            "agent_instruction": (
+                f"Present ONLY these {len(recommendations)} wine(s), exactly as returned. "
+                "Do NOT add, substitute, or re-present any other wine — not from the RAG "
+                "context, not from earlier turns of this conversation. These results "
+                "already reflect the user's saved taste profile AND their latest "
+                "thumbs-up/thumbs-down feedback; earlier recommendations in the chat "
+                "history are stale."
+            ),
         }
 
     except Exception as exc:
@@ -343,7 +351,11 @@ def build_recommend_for_me_tool(profile: dict[str, Any], user_id: str | None = N
             "If the profile is empty the tool will tell you exactly what to ask; "
             "if it has preferences it returns ready-to-present wine picks. "
             "Do NOT use for a specific dish (pair_with_food), named wines "
-            "(compare_wines), or explicit filter constraints (filter_wines)."
+            "(compare_wines), or explicit filter constraints (filter_wines). "
+            "Recommend ONLY the wines this tool returns — never supplement from RAG "
+            "context or conversation history. Call it FRESH on every recommendation "
+            "request, even a repeated one: results change whenever the user's profile "
+            "or 👍/👎 feedback changes."
         ),
         args_schema=RecommendForMeArgs,
     )

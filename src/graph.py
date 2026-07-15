@@ -327,6 +327,7 @@ def agent_node(state: AgentState) -> dict[str, Any]:
         state.get("history"),
         state.get("rag_context") or [],
         expertise_level=profile.get("expertise_level", "beginner"),
+        route=state.get("route"),
     )
     tools = _tools_for_route(
         state.get("route") or "general", state.get("profile") or {}, state.get("disabled_tools"),
