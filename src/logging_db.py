@@ -165,6 +165,26 @@ def delete_feedback(*, user_id: str, wine_id: str) -> None:
         log.warning("delete_feedback failed: %s", exc)
 
 
+def delete_all_feedback(user_id: str) -> None:
+    """Delete EVERY recommendation_feedback row for this user (GDPR
+    'Forget everything about me' — US-004), not just one wine.
+
+    Unlike delete_feedback (per-wine, used by the toggle-off UI flow), this
+    has no wine_id filter. Called alongside delete_preferences/delete_thread
+    in the sidebar's forget-me handler so the GDPR erasure is complete —
+    without it, a user's historical 👍/👎 ratings survived under their
+    user_id even after "forgetting everything." Swallows all exceptions —
+    same best-effort principle as the other forget-me deletions.
+    """
+    try:
+        _db().table("recommendation_feedback") \
+            .delete() \
+            .eq("user_id", user_id) \
+            .execute()
+    except Exception as exc:
+        log.warning("delete_all_feedback failed: %s", exc)
+
+
 def get_feedback_reason(*, user_id: str, query_id: str | None, wine_id: str) -> dict[str, Any] | None:
     """Read the fold-delta provenance recorded in this exact
     (user_id, query_id, wine_id) row's `reason` column (Phase 3 step 6h).

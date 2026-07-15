@@ -176,6 +176,8 @@ def render_taste_profile(locale: str) -> None:
                 if delete_preferences(user_id):
                     from src.graph import delete_thread
                     delete_thread(f"user:{user_id}")   # erase durable conversation too (US-004)
+                    from src.logging_db import delete_all_feedback
+                    delete_all_feedback(user_id)   # erase all recommendation_feedback rows too (US-004)
                     st.session_state.pop("_prefs_cache", None)
                     st.success(t("profile_deleted", locale))
                     st.rerun()
