@@ -176,13 +176,14 @@ def render_taste_profile(locale: str) -> None:
                 if delete_preferences(user_id):
                     from src.graph import delete_thread
                     delete_thread(f"user:{user_id}")   # erase durable conversation too (US-004)
-                    from src.logging_db import delete_all_feedback
+                    from src.logging_db import delete_all_feedback, erase_user_history
                     delete_all_feedback(user_id)   # erase all recommendation_feedback rows too (US-004)
+                    erase_user_history(user_id)    # anonymize+scrub query_logs/security_events (Phase 4 step 4c)
                     from src.auth_persistence import clear_token
                     clear_token()   # the persistent login cookie is part of "everything" too (Phase 4 step 4)
-                    st.session_state.pop("_prefs_cache", None)
                     st.success(t("profile_deleted", locale))
-                    st.rerun()
+                    from src.ui.session_reset import reset_to_anonymous
+                    reset_to_anonymous()   # pristine anonymous state, last (Phase 4 step 4c)
                 else:
                     st.error(t("profile_save_error", locale))
             col_cancel.button(t("forget_me_cancel", locale), key="forget_me_cancel_btn")

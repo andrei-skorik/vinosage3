@@ -185,6 +185,44 @@ def delete_all_feedback(user_id: str) -> None:
         log.warning("delete_all_feedback failed: %s", exc)
 
 
+def erase_user_history(user_id: str) -> bool:
+    """Anonymize + scrub this user's query_logs rows (GDPR 'Forget everything
+    about me' — US-004) — NEVER hard-delete them.
+
+    Hard-deleting query_logs would cascade (ON DELETE CASCADE, sql/01) into
+    token_usage, silently shrinking ratelimit.get_daily_cost_micros()'s
+    running total — i.e. forget-me would let a user reset their own
+    contribution to the shared daily cost cap (spend -> forget -> spend
+    again). Instead this unlinks identity and erases content while leaving
+    the numeric cost rows intact and still counted:
+      - query_logs: user_id -> NULL, user_query/final_answer -> '[erased]'.
+      - security_events: user_id -> NULL for the same user. The column's own
+        FK is `on delete set null` (sql/07), but that only fires if the
+        auth.users row itself is deleted — forget-me does not delete the
+        account, only the user's data, so it needs this explicit UPDATE too.
+        The event content (user_query, matched_rule, etc.) is intentionally
+        LEFT INTACT — those rows exist for security audit, not
+        personalisation, and unlinking the identity is enough for GDPR
+        purposes here (see the handoff for this trade-off spelled out).
+
+    Returns False (never raises) on any failure, so the forget-me UI can
+    show its existing generic error instead of a false success.
+    """
+    try:
+        _db().table("query_logs").update({
+            "user_id":      None,
+            "user_query":   "[erased]",
+            "final_answer": "[erased]",
+        }).eq("user_id", user_id).execute()
+        _db().table("security_events").update({
+            "user_id": None,
+        }).eq("user_id", user_id).execute()
+        return True
+    except Exception as exc:
+        log.warning("erase_user_history failed: %s", exc)
+        return False
+
+
 def get_feedback_reason(*, user_id: str, query_id: str | None, wine_id: str) -> dict[str, Any] | None:
     """Read the fold-delta provenance recorded in this exact
     (user_id, query_id, wine_id) row's `reason` column (Phase 3 step 6h).

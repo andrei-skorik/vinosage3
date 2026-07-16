@@ -213,8 +213,8 @@ def render_profile_widget(locale: str) -> None:
     if st.button(f"🚪 {t('logout_button', locale)}", use_container_width=True, key="logout_btn"):
         sign_out(auth["access_token"], auth["refresh_token"])
         clear_token()
-        st.session_state.auth = None
-        st.rerun()
+        from src.ui.session_reset import reset_to_anonymous
+        reset_to_anonymous()   # pristine anonymous state — age gate included (Phase 4 step 4c)
 
 
 def _format_local_time(iso_ts: str) -> str:
