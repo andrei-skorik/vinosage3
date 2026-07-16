@@ -63,7 +63,7 @@ from src.agent import run_agent  # noqa: E402
 from src.checkpointer import rehydrate_chat_entry, resolve_thread_id, serialize_chat_entry  # noqa: E402
 from src.config import CHAT_MODELS, INDEPTH_MODEL, QUICK_MODEL  # noqa: E402
 from src.graph import append_chat_log, get_thread_chat_log  # noqa: E402
-from src.logging_db import log_query, log_token_usage, log_tool_calls  # noqa: E402
+from src.logging_db import log_query, log_stt_usage, log_token_usage, log_tool_calls  # noqa: E402
 from src.preferences import get_preferences  # noqa: E402
 from src.rag import retrieve  # noqa: E402
 from src.ratelimit import check_cost_cap, check_rate_limit  # noqa: E402
@@ -304,10 +304,22 @@ def main() -> None:
                     )
                 if _res.get("error"):
                     st.toast(t("voice_error", locale), icon="⚠️")
-                elif not _res["text"]:
-                    st.toast(t("voice_empty", locale), icon="🎤")
                 else:
-                    voice_prompt = _res["text"]
+                    # Any consumed outcome that returned usage — including
+                    # empty-transcript silence, which still billed seconds —
+                    # is logged toward the daily cost cap (Phase 4 step 3).
+                    # Best-effort; never blocks the turn.
+                    log_stt_usage(
+                        session_id=session_id,
+                        user_id=(_auth_now.get("user_id") if _auth_now else None),
+                        model=_res.get("model") or "",
+                        seconds=_res.get("seconds"),
+                        cost_eur_micros=_res.get("cost_eur_micros") or 0,
+                    )
+                    if not _res["text"]:
+                        st.toast(t("voice_empty", locale), icon="🎤")
+                    else:
+                        voice_prompt = _res["text"]
 
     # ── Layout: chat + optional admin tab ────────────────────────────────────
     if st.session_state.admin_unlocked:

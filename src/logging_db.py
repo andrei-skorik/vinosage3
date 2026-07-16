@@ -271,3 +271,31 @@ def log_token_usage(
         }).execute()
     except Exception as exc:
         log.warning("log_token_usage failed: %s", exc)
+
+
+def log_stt_usage(
+    *,
+    session_id: str,
+    user_id: str | None,
+    model: str,
+    seconds: float | None,
+    cost_eur_micros: int,
+) -> None:
+    """Insert into stt_usage (sql/10 — Phase 4 step 3).
+
+    Folds voice-transcription spend into the daily cost cap alongside
+    token_usage (see ratelimit.get_daily_cost_micros). Called for every
+    consumed voice recording, including silent ones that still billed
+    seconds. Swallows all exceptions — a logging failure must never break
+    the chat path.
+    """
+    try:
+        _db().table("stt_usage").insert({
+            "session_id":      session_id,
+            "user_id":         user_id,
+            "model":           model,
+            "seconds":         seconds,
+            "cost_eur_micros": cost_eur_micros,
+        }).execute()
+    except Exception as exc:
+        log.warning("log_stt_usage failed: %s", exc)

@@ -133,5 +133,67 @@ def test_cost_cap_fails_open_on_db_error(monkeypatch):
     assert rl.check_cost_cap().allowed is True
 
 
+# ── Phase 4 step 3: STT spend folded into the daily cap ──────────────────────
+
+
+class _FakeChain:
+    """Minimal stand-in for a Supabase query-builder chain: every filter
+    method (select/gte/in_) returns self; execute() returns canned data or
+    raises, per table."""
+
+    def __init__(self, data=None, raises: Exception | None = None):
+        self._data = data or []
+        self._raises = raises
+
+    def select(self, *_a, **_k): return self
+    def gte(self, *_a, **_k): return self
+    def in_(self, *_a, **_k): return self
+
+    def execute(self):
+        if self._raises:
+            raise self._raises
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.data = self._data
+        return resp
+
+
+def _fake_db(query_ids, token_costs, stt_costs=None, stt_raises=False):
+    from unittest.mock import MagicMock
+
+    tables = {
+        "query_logs": _FakeChain([{"id": qid} for qid in query_ids]),
+        "token_usage": _FakeChain([{"cost_eur_micros": c} for c in token_costs]),
+        "stt_usage": (
+            _FakeChain(raises=RuntimeError("stt_usage missing"))
+            if stt_raises
+            else _FakeChain([{"cost_eur_micros": c} for c in (stt_costs or [])])
+        ),
+    }
+    db = MagicMock()
+    db.table.side_effect = lambda name: tables[name]
+    return db
+
+
+def test_daily_cost_sums_token_and_stt_usage(monkeypatch):
+    """Both sources present -> totals add up (sql/10, Phase 4 step 3)."""
+    import src.catalog as catalog
+
+    fake_db = _fake_db(query_ids=["q1"], token_costs=[500], stt_costs=[300, 200])
+    monkeypatch.setattr(catalog, "get_service_db", lambda: fake_db)
+    assert rl.get_daily_cost_micros() == 1000  # 500 + 300 + 200
+
+
+def test_daily_cost_stt_failure_still_returns_token_total(monkeypatch):
+    """stt_usage query fails (e.g. sql/10 not yet applied) -> token_usage's
+    total is still returned, not zeroed out — a partial hiccup degrades to
+    under-counting, never to blocking a healthy source."""
+    import src.catalog as catalog
+
+    fake_db = _fake_db(query_ids=["q1"], token_costs=[700], stt_raises=True)
+    monkeypatch.setattr(catalog, "get_service_db", lambda: fake_db)
+    assert rl.get_daily_cost_micros() == 700
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

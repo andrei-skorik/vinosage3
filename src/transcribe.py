@@ -15,10 +15,12 @@ Project conventions honoured:
   treat it exactly like typed text. This module does no interpretation.
 
 Cost note: OpenRouter bills transcription per audio second (the response's
-``usage.cost`` field). This spend is NOT counted toward the €1/day cap
-(token_usage is query-keyed; no query exists yet at transcription time) —
-recorded as a known gap; the sliding-window rate limit is the effective
-throttle (app.py checks it BEFORE transcribing).
+``usage.cost`` field). This spend is now folded into the daily cost cap
+(Phase 4 step 3): ``transcribe_audio`` returns ``cost_eur_micros``, app.py
+logs it via ``log_stt_usage`` into the ``stt_usage`` table, and
+``ratelimit.get_daily_cost_micros`` sums it alongside ``token_usage``. The
+sliding-window rate limit remains the first-line throttle (app.py checks it
+BEFORE transcribing) regardless.
 """
 from __future__ import annotations
 
@@ -61,7 +63,8 @@ def transcribe_audio(
 ) -> dict[str, Any]:
     """Transcribe recorded audio to text.
 
-    Success: ``{"text": str, "model": str, "seconds": float | None}``
+    Success: ``{"text": str, "model": str, "seconds": float | None,
+    "cost_eur_micros": int}``
     (``text`` may be empty for silent recordings — the caller decides how to
     message that; it is NOT an error).
     Failure: ``{"error": {"code": ..., "message": ...}}``.
@@ -111,7 +114,17 @@ def transcribe_audio(
             if not re.search(r"\w", text):
                 text = ""
             usage = payload.get("usage") or {}
-            return {"text": text, "model": TRANSCRIBE_MODEL, "seconds": usage.get("seconds")}
+            # OpenRouter reports usage.cost in USD; stored 1:1 as EUR-equivalent
+            # micros (illustrative-EUR approximation, same convention as
+            # config.CHAT_MODELS' pricing) — Phase 4 step 3, folds STT spend
+            # into the daily cost cap alongside token_usage.
+            cost_eur_micros = int(round((usage.get("cost") or 0) * 1_000_000))
+            return {
+                "text": text,
+                "model": TRANSCRIBE_MODEL,
+                "seconds": usage.get("seconds"),
+                "cost_eur_micros": cost_eur_micros,
+            }
         except Exception as exc:
             log.warning("Transcription attempt %d failed: %s", attempt + 1, exc)
             last_exc = exc

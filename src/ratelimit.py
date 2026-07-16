@@ -62,12 +62,21 @@ def check_rate_limit(session_id: str) -> RateLimitResult:
 
 
 def get_daily_cost_micros() -> int:
-    """Sum cost_eur_micros from token_usage for today (UTC). Returns 0 on failure."""
-    try:
-        from datetime import date
-        from src.catalog import get_service_db
+    """Sum cost_eur_micros from token_usage + stt_usage for today (UTC).
 
-        today = date.today().isoformat()  # e.g. "2026-06-08"
+    Each source is queried and summed independently (Phase 4 step 3 added
+    the stt_usage half — voice-transcription spend previously invisible to
+    the cap): a failure in one source must not zero out the other, so a
+    partial DB hiccup degrades to under-counting, not to blocking everyone
+    out of a healthy source. Returns 0 (both) on total failure.
+    """
+    from datetime import date
+    from src.catalog import get_service_db
+
+    today = date.today().isoformat()  # e.g. "2026-06-08"
+
+    token_total = 0
+    try:
         db = get_service_db()
         # query_logs has created_at; token_usage.query_id is FK → query_logs.id
         ql = (
@@ -76,23 +85,35 @@ def get_daily_cost_micros() -> int:
             .gte("created_at", today)
             .execute()
         )
-        if not ql.data:
-            return 0
-        ids = [r["id"] for r in ql.data]
-        # Fetch cost for those query IDs in batches to respect URL length limits
-        total = 0
-        for i in range(0, len(ids), 200):
-            batch = ids[i : i + 200]
-            tu = (
-                db.table("token_usage")
-                .select("cost_eur_micros")
-                .in_("query_id", batch)
-                .execute()
-            )
-            total += sum(r.get("cost_eur_micros", 0) for r in tu.data)
-        return total
+        if ql.data:
+            ids = [r["id"] for r in ql.data]
+            # Fetch cost for those query IDs in batches to respect URL length limits
+            for i in range(0, len(ids), 200):
+                batch = ids[i : i + 200]
+                tu = (
+                    db.table("token_usage")
+                    .select("cost_eur_micros")
+                    .in_("query_id", batch)
+                    .execute()
+                )
+                token_total += sum(r.get("cost_eur_micros", 0) for r in tu.data)
     except Exception:
-        return 0
+        token_total = 0
+
+    stt_total = 0
+    try:
+        db = get_service_db()
+        stt = (
+            db.table("stt_usage")
+            .select("cost_eur_micros")
+            .gte("created_at", today)
+            .execute()
+        )
+        stt_total = sum(r.get("cost_eur_micros", 0) for r in (stt.data or []))
+    except Exception:
+        stt_total = 0
+
+    return token_total + stt_total
 
 
 def check_cost_cap() -> RateLimitResult:

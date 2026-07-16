@@ -134,6 +134,8 @@
   "admin_temp_label": "Temperature",
   "admin_tools_label": "Enabled tools",
   "admin_system_prompt_label": "Active system prompt",
+  "admin_sweep_anon_button": "Clean up anonymous threads",
+  "admin_sweep_anon_done": "Removed {count} anonymous thread(s).",
   "admin_users_header": "Per-user statistics",
   "admin_feedback_header": "Recommendation feedback",
   "feedback_ratings_total": "Ratings",

@@ -98,6 +98,16 @@ def _render_dev_settings(locale: str) -> None:
     else:
         st.caption("⚪ LangSmith tracing: OFF (no LANGSMITH_API_KEY / LANGSMITH_TRACING set)")
 
+    # Anonymous checkpoint-thread housekeeping (Phase 4, step 3). Manual-only
+    # by design — Streamlit Cloud has no cron; an on-startup opportunistic
+    # sweep is a possible future option (see docs/PHASE3_HANDOFF.md), not
+    # implemented here.
+    if st.button(t("admin_sweep_anon_button", locale), key="admin_sweep_anon_btn"):
+        with st.spinner("Sweeping…"):
+            from src.checkpointer import sweep_anon_threads
+            n = sweep_anon_threads()
+        st.toast(t("admin_sweep_anon_done", locale, count=n))
+
 
 def _render_stats(locale: str) -> None:
     try:

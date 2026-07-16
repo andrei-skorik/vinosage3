@@ -134,6 +134,8 @@
   "admin_temp_label": "Температура",
   "admin_tools_label": "Включённые инструменты",
   "admin_system_prompt_label": "Активный системный промпт",
+  "admin_sweep_anon_button": "Очистить анонимные треды",
+  "admin_sweep_anon_done": "Удалено анонимных тредов: {count}.",
   "admin_users_header": "Статистика по пользователям",
   "admin_feedback_header": "Фидбек по рекомендациям",
   "feedback_ratings_total": "Оценок",

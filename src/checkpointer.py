@@ -100,6 +100,58 @@ def is_durable() -> bool:
     return type(cp).__name__ == "PostgresSaver"
 
 
+def sweep_anon_threads() -> int:
+    """Delete every ``anon:*`` checkpoint thread (Phase 4 step 3 housekeeping).
+
+    Safety argument: anonymous sessions never read checkpoint state back —
+    their chat lives in ``st.session_state``, ``chat_log`` is never appended
+    for them (app.py only calls ``append_chat_log`` for logged-in users),
+    and every other per-turn channel is simply overwritten on the graph's
+    next invoke. So deleting an ``anon:*`` thread between turns is
+    behaviorally invisible even for a LIVE anonymous session — there is
+    nothing durable for them to lose.
+
+    No-op (returns 0) on ``MemorySaver`` — nothing to sweep; it's already
+    ephemeral and per-process. On ``PostgresSaver``, reads distinct
+    ``anon:*`` thread_ids directly from the library-owned ``checkpoints``
+    table (read-only query against langgraph-checkpoint-postgres' own
+    schema, not this project's ``sql/``) via the existing connection pool,
+    then deletes each one through the official ``delete_thread`` API only —
+    mutations never touch the library's tables directly. The ``anon:``
+    prefix is re-checked in Python after the fetch as a second, independent
+    guard (defense-in-depth: a ``user:*`` thread must never be swept even if
+    the SQL filter were ever loosened). Swallows all exceptions; manual/
+    best-effort by design (admin-triggered — no cron on Streamlit Cloud).
+    """
+    cp = get_checkpointer()
+    if type(cp).__name__ != "PostgresSaver":
+        return 0
+    try:
+        from src.graph import delete_thread  # local import: graph.py imports this module
+
+        with _pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT thread_id FROM checkpoints WHERE thread_id LIKE 'anon:%'"
+                )
+                rows = cur.fetchall()
+
+        thread_ids = [
+            (row["thread_id"] if isinstance(row, dict) else row[0])
+            for row in rows
+        ]
+        anon_ids = [tid for tid in thread_ids if tid.startswith("anon:")]
+
+        count = 0
+        for tid in anon_ids:
+            if delete_thread(tid):
+                count += 1
+        return count
+    except Exception as exc:
+        log.warning("sweep_anon_threads failed: %s", exc)
+        return 0
+
+
 def resolve_thread_id(user_id: str | None, session_id: str) -> str:
     """Stable thread for logged-in users; ephemeral for anonymous.
 

@@ -191,6 +191,98 @@ def test_sacred_layer3_filter_operates_on_rehydrated_sources():
     assert "Sweet Night" not in joined
 
 
+# ── sweep_anon_threads (Phase 4, step 3 housekeeping) ────────────────────────
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def execute(self, *_a, **_k):
+        pass
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConnection:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def cursor(self):
+        return _FakeCursor(self._rows)
+
+
+class _FakePool:
+    def __init__(self, rows=None, raises: Exception | None = None):
+        self._rows = rows or []
+        self._raises = raises
+
+    def connection(self):
+        if self._raises:
+            raise self._raises
+        return _FakeConnection(self._rows)
+
+
+class PostgresSaver:  # noqa: N801 — deliberately named to satisfy the
+    """Fake checkpointer whose class name matches what sweep_anon_threads
+    checks via type(cp).__name__ == "PostgresSaver"."""
+
+
+def test_sweep_anon_threads_noop_on_memorysaver(monkeypatch):
+    import src.checkpointer as cp
+
+    class MemorySaver:
+        pass
+
+    monkeypatch.setattr(cp, "get_checkpointer", lambda: MemorySaver())
+    assert cp.sweep_anon_threads() == 0
+
+
+def test_sweep_anon_threads_deletes_only_anon_ids(monkeypatch):
+    """A user:* id in the fixture must survive — only anon:* is swept,
+    both via the SQL filter and the independent Python-side re-check."""
+    import src.checkpointer as cp
+
+    rows = [
+        {"thread_id": "anon:aaa"},
+        {"thread_id": "anon:bbb"},
+        {"thread_id": "user:ccc"},
+    ]
+    monkeypatch.setattr(cp, "get_checkpointer", lambda: PostgresSaver())
+    monkeypatch.setattr(cp, "_pool", _FakePool(rows))
+
+    deleted: list[str] = []
+    monkeypatch.setattr("src.graph.delete_thread", lambda tid: deleted.append(tid) or True)
+
+    count = cp.sweep_anon_threads()
+
+    assert count == 2
+    assert set(deleted) == {"anon:aaa", "anon:bbb"}
+    assert "user:ccc" not in deleted
+
+
+def test_sweep_anon_threads_total_failure_returns_zero(monkeypatch):
+    import src.checkpointer as cp
+
+    monkeypatch.setattr(cp, "get_checkpointer", lambda: PostgresSaver())
+    monkeypatch.setattr(cp, "_pool", _FakePool(raises=RuntimeError("pool down")))
+
+    assert cp.sweep_anon_threads() == 0  # must not raise
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

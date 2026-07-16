@@ -134,6 +134,8 @@
   "admin_temp_label": "Lämpötila",
   "admin_tools_label": "Käytössä olevat työkalut",
   "admin_system_prompt_label": "Aktiivinen järjestelmäkehote",
+  "admin_sweep_anon_button": "Siivoa anonyymit keskustelut",
+  "admin_sweep_anon_done": "Poistettu {count} anonyymia keskustelua.",
   "admin_users_header": "Käyttäjäkohtaiset tilastot",
   "admin_feedback_header": "Suositusten palaute",
   "feedback_ratings_total": "Arviot",

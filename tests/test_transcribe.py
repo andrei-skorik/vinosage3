@@ -38,12 +38,15 @@ def test_success_returns_text_and_usage(monkeypatch):
 
     def fake_post(url, headers=None, data=None, files=None, timeout=None):
         captured.update(url=url, data=data, files=files, timeout=timeout, headers=headers)
-        return _Resp({"text": " Recommend a red wine. ", "usage": {"seconds": 4}})
+        return _Resp({"text": " Recommend a red wine. ", "usage": {"seconds": 4, "cost": 0.0012}})
 
     monkeypatch.setattr(tr.httpx, "post", fake_post)
     res = tr.transcribe_audio(b"RIFF....", filename="voice.wav", locale="en")
 
-    assert res == {"text": "Recommend a red wine.", "model": tr.TRANSCRIBE_MODEL, "seconds": 4}
+    assert res == {
+        "text": "Recommend a red wine.", "model": tr.TRANSCRIBE_MODEL, "seconds": 4,
+        "cost_eur_micros": 1200,
+    }
     assert captured["url"].endswith("/audio/transcriptions")
     assert captured["data"]["model"] == tr.TRANSCRIBE_MODEL
     assert captured["data"]["language"] == "en"
@@ -85,6 +88,8 @@ def test_empty_transcript_is_success_not_error(monkeypatch):
     res = tr.transcribe_audio(b"x")
     assert "error" not in res
     assert res["text"] == ""
+    # Silence still bills seconds; usage.cost absent here -> 0, never crashes.
+    assert res["cost_eur_micros"] == 0
 
 
 def test_punctuation_only_transcript_normalized_to_empty(monkeypatch):
