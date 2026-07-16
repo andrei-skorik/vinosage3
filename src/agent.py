@@ -347,6 +347,19 @@ _FOOD_QUERY_KWS = {
     "lachs","forelle","thunfisch","hecht","fisch","fleisch",
     "rind","lamm","schwein","kalb","huhn","ente","pute",
     "pilze","trüffel","käse","schokolade","garnele","auster","krabbe",
+    # German — Phase 4 step 2 additions (multilingual coverage for the 30
+    # nouns added in step 3). Singular + common plural listed explicitly:
+    # _in_fqkws only strips an English-style trailing "-s", which is not
+    # how German pluralizes, so relying on it here would silently miss
+    # every plural query.
+    "pudding","mousse","fondue","brownie","brownies","tarte","törtchen",
+    "brot","brioche","fladenbrot","nudel","nudeln",
+    "knödel","klöße","teigtaschen",
+    "garnelen",  # garnele (singular) already present above
+    "krabben",   # krabbe (singular) already present above
+    "tintenfisch","kalmar","oktopus","krake",
+    "jakobsmuschel","jakobsmuscheln","wachtel","wachteln","fasan",
+    "burger","suppe","suppen","eintopf","gulasch","ragout","chili","tapas",
     # Finnish — stem forms cover nominative + partitive (most common in questions)
     "lohi","tonnikala","siika","hauki","kala","liha",
     "nauta","lammas","kana","kalkkuna","ankka",
@@ -372,6 +385,12 @@ _RU_FOOD_STEMS = frozenset({
     "шоколад", "сыр", "паст", "пицц", "ризотт",
     "гриб", "трюфел", "салат", "барбекю",
     "карри", "рагу", "бургер", "суп", "десерт",
+    # Phase 4 step 2 additions (multilingual coverage for the 30 nouns added
+    # in step 3). суп/краб/кальмар/осьминог/гребешк/креветк/бургер/рагу were
+    # already covered above — verified, not duplicated here.
+    "пудинг", "мусс", "фондю", "брауни", "тарт", "хлеб", "бриош",
+    "лепешк", "лепёшк", "лапш", "пельмен", "вареник", "клецк", "клёцк",
+    "перепел", "фазан", "чили", "тапас",
 })
 
 
@@ -386,13 +405,49 @@ def _has_ru_food(text: str) -> bool:
     return any(w.startswith(stem) for w in words for stem in _RU_FOOD_STEMS)
 
 
+# Finnish food stems — prefix-matched, same mechanism as _RU_FOOD_STEMS
+# (Phase 4 step 2: introduced because Finnish inflects as heavily as Russian
+# — partitive/genitive/illative etc. all suffix onto a shared stem — and no
+# such mechanism previously existed; the pre-existing Finnish words in
+# _FOOD_QUERY_KWS are exact-match only and are left untouched here, in scope
+# for this step's 30-noun coverage only, not a general FI-vocabulary redo).
+# Where the human-curated list gave two forms ("word/stem-"), both are
+# listed as separate stems so the nominative and the inflected continuations
+# both match. "pata" (stew/pot) deliberately excluded — too polysemous.
+_FI_FOOD_STEMS = frozenset({
+    "vanukas", "vanukka",       # pudding
+    "mousse", "fondue", "brownie",
+    "torttu", "tortu",          # tart
+    "leipä", "leivä",           # bread
+    "nuudeli",                  # noodle
+    "katkarapu", "katkarav",    # prawn
+    "rapu", "ravu",             # crab
+    "kalmari",                  # squid
+    "mustekala",                # octopus
+    "kampasimpuk",              # scallop
+    "viiriäi",                  # quail
+    "fasaani",                  # pheasant
+    "burgeri", "hampurilai",    # burger
+    "keitto", "keito",          # soup
+    "muhenno",                  # stew
+    "chili", "tapas",
+})
+
+
+def _has_fi_food(text: str) -> bool:
+    """Return True if text contains any Finnish food word in any inflected
+    form. Same prefix-stem mechanism as _has_ru_food (Phase 4 step 2)."""
+    words = re.findall(r'\b\w{3,}\b', text.lower())
+    return any(w.startswith(stem) for w in words for stem in _FI_FOOD_STEMS)
+
+
 def _is_food_query(query: str, history: list[dict[str, Any]] | None) -> bool:
     """Return True if query (or recent history) is about food pairing."""
     def _in_fqkws(w: str) -> bool:
         return w in _FOOD_QUERY_KWS or (w.endswith("s") and len(w) > 3 and w[:-1] in _FOOD_QUERY_KWS)
 
     found = [w for w in re.findall(r'\b\w{4,}\b', query.lower()) if _in_fqkws(w)]
-    if found or _has_ru_food(query):
+    if found or _has_ru_food(query) or _has_fi_food(query):
         return True
     if history:
         # Scan only user messages — assistant wine descriptions contain tasting-note
@@ -406,6 +461,7 @@ def _is_food_query(query: str, history: list[dict[str, Any]] | None) -> bool:
         return (
             bool([w for w in re.findall(r'\b\w{4,}\b', recent.lower()) if _in_fqkws(w)])
             or _has_ru_food(recent)
+            or _has_fi_food(recent)
         )
     return False
 

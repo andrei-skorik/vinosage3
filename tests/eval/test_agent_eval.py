@@ -33,6 +33,45 @@ def tool_names(result) -> list[str]:
     return [tc["tool_name"] for tc in result.tool_calls]
 
 
+def _catalog_wine_ids() -> set[str]:
+    from src.catalog import get_active_wines_df
+    df = get_active_wines_df()
+    return set(df["wine_id"].astype(str).tolist())
+
+
+def _assert_no_hallucinated_compare_wines(result, catalog_ids: set[str]) -> None:
+    """Every wine_id compare_wines returned (if it was called at all) must
+    exist in the live catalog — same catalog-membership pattern as
+    test_pair_with_food_results_are_all_catalog_wines. If compare_wines
+    wasn't called (e.g. explain_wine_concept answered instead), there is
+    nothing to check — a concept explanation doesn't name specific catalog
+    wines, so it can't hallucinate one."""
+    for tc in result.tool_calls:
+        if tc["tool_name"] != "compare_wines":
+            continue
+        res = tc.get("result") or {}
+        for entry in res.get("comparison") or []:
+            assert str(entry["wine_id"]) in catalog_ids, (
+                f"Hallucinated wine_id {entry['wine_id']!r} in compare_wines result"
+            )
+
+
+def _two_cheapest_active_red_titles() -> tuple[str, str]:
+    """Fetch two real catalog titles at test time instead of hardcoding, so
+    catalog drift (re-seeded data, renamed wines) can't silently rot the
+    test."""
+    from src.catalog import get_active_wines_df
+    df = get_active_wines_df()
+    reds = (
+        df[df["type"] == "Red"]
+        .dropna(subset=["price_eur_cents"])
+        .sort_values("price_eur_cents")
+    )
+    titles = reds["title"].tolist()
+    assert len(titles) >= 2, "Catalog needs at least 2 active red wines for this test"
+    return titles[0], titles[1]
+
+
 # ── US-001..011 ───────────────────────────────────────────────────────────────
 
 def test_us001_recommend_red_under_15(agent):
@@ -57,11 +96,32 @@ def test_us003_budget_basket_uses_tool(agent):
     assert has_price(r.answer)
 
 
-def test_us004_compare_wines_uses_tool(agent):
-    """US-004: Compare two wines → compare_wines tool is called."""
-    r = agent("Compare Malbec and Cabernet Sauvignon")
+def test_compare_named_wines_uses_compare_tool(agent):
+    """US-004a: comparing two REAL catalog wines by name must strictly call
+    compare_wines (per SPEC: '2-3 named wines' is compare_wines' own turf,
+    not explain_wine_concept's). Titles are fetched live so catalog drift
+    can't rot this test."""
+    title_a, title_b = _two_cheapest_active_red_titles()
+    r = agent(f"Compare {title_a} and {title_b}")
     assert r.status == "ok"
     assert "compare_wines" in tool_names(r)
+    _assert_no_hallucinated_compare_wines(r, _catalog_wine_ids())
+
+
+def test_compare_varieties_uses_either_tool(agent):
+    """US-004b: a variety-vs-variety comparison ("Compare Malbec and Cabernet
+    Sauvignon") is genuinely ambiguous per the SPEC's own tool boundaries —
+    compare_wines handles named wines, explain_wine_concept handles
+    grape/region/term/style. Either is spec-legitimate, so the tool CHOICE
+    is not gated here; only groundedness is (was previously
+    test_us004_compare_wines_uses_tool, which wrongly gated on compare_wines
+    only — see docs/PHASE3_HANDOFF.md backlog #13)."""
+    r = agent("Compare Malbec and Cabernet Sauvignon")
+    assert r.status == "ok"
+    assert {"compare_wines", "explain_wine_concept"} & set(tool_names(r)), (
+        "Expected compare_wines or explain_wine_concept to be called"
+    )
+    _assert_no_hallucinated_compare_wines(r, _catalog_wine_ids())
 
 
 def test_us005_stats_returns_number(agent):
@@ -219,12 +279,6 @@ _EVAL_DATASET = [
     # all). This one has no recognised food noun anywhere in the phrase.
     {"query": "What wine pairs with a purple unicorn dust dessert?", "kind": "no_match_dish"},
 ]
-
-
-def _catalog_wine_ids() -> set[str]:
-    from src.catalog import get_active_wines_df
-    df = get_active_wines_df()
-    return set(df["wine_id"].astype(str).tolist())
 
 
 def test_pair_with_food_results_are_all_catalog_wines(agent):
