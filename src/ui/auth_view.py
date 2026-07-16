@@ -23,6 +23,7 @@ from src.auth import (
     sign_up,
     upload_avatar,
 )
+from src.auth_persistence import clear_token, save_token
 
 AVATAR_MAX_UPLOAD_MB = 2
 from src.i18n import t
@@ -98,6 +99,7 @@ def render_auth_forms(locale: str) -> None:
             result = sign_in(email, password)
             if result.ok and result.session:
                 _set_authed_session(result.session)
+                save_token(result.session.refresh_token)
                 st.rerun()
             else:
                 st.error(t("auth_error_invalid", locale))
@@ -144,6 +146,7 @@ def render_auth_forms(locale: str) -> None:
                             "avatar_url": default_avatar_url(result.session.user_id),
                         },
                     )
+                    save_token(result.session.refresh_token)
                     st.success(t("register_success", locale))
                     st.rerun()
                 elif result.error == "confirm_email":
@@ -209,6 +212,7 @@ def render_profile_widget(locale: str) -> None:
 
     if st.button(f"🚪 {t('logout_button', locale)}", use_container_width=True, key="logout_btn"):
         sign_out(auth["access_token"], auth["refresh_token"])
+        clear_token()
         st.session_state.auth = None
         st.rerun()
 

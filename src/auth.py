@@ -81,6 +81,29 @@ def sign_in(email: str, password: str) -> AuthResult:
         return AuthResult(ok=False, error=str(exc))
 
 
+def refresh_session(refresh_token: str) -> AuthResult:
+    """Exchange a (possibly cookie-persisted) refresh_token for a new session.
+
+    Used by src/auth_persistence.py to restore login across a browser
+    refresh (Phase 4, step 4). Supabase rotates the refresh_token on every
+    call — the returned session carries the NEW one; the caller is
+    responsible for writing it back to storage, or the user is logged out on
+    the next refresh."""
+    try:
+        resp = _fresh_client().auth.refresh_session(refresh_token)
+        if resp.user is None or resp.session is None:
+            return AuthResult(ok=False, error="invalid_token")
+        session = AuthSession(
+            user_id=resp.user.id,
+            email=resp.user.email or "",
+            access_token=resp.session.access_token,
+            refresh_token=resp.session.refresh_token,
+        )
+        return AuthResult(ok=True, session=session)
+    except Exception as exc:
+        return AuthResult(ok=False, error=str(exc))
+
+
 def sign_out(access_token: str, refresh_token: str) -> None:
     try:
         _authed_client(access_token, refresh_token).auth.sign_out()

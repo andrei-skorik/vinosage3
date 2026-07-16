@@ -60,6 +60,7 @@ for _k, _v in _DEFAULTS.items():
 
 # ── Imports deferred so page_config executes before any st call ───────────────
 from src.agent import run_agent  # noqa: E402
+from src.auth_persistence import emit_pending_cookie, try_restore_session  # noqa: E402
 from src.checkpointer import rehydrate_chat_entry, resolve_thread_id, serialize_chat_entry  # noqa: E402
 from src.config import CHAT_MODELS, INDEPTH_MODEL, QUICK_MODEL  # noqa: E402
 from src.graph import append_chat_log, get_thread_chat_log  # noqa: E402
@@ -224,6 +225,17 @@ def _current_user() -> dict | None:
 
 
 def main() -> None:
+    # Login persistence across F5 (Phase 4, step 4/4b). emit_pending_cookie()
+    # must run first — it flushes any cookie write/clear staged by the
+    # PREVIOUS run's login/register/logout/forget-me action (see
+    # src/auth_persistence.py's module docstring for why the write can't
+    # happen inline in that prior run). try_restore_session() must then run
+    # before render_sidebar() (so the profile widget renders instead of the
+    # login form in the SAME run a restore succeeds) and before
+    # resolve_thread_id below (so the durable chat loads in that same run too).
+    emit_pending_cookie()
+    try_restore_session()
+
     render_sidebar()
 
     locale     = st.session_state.locale

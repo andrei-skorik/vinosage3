@@ -178,6 +178,8 @@ def render_taste_profile(locale: str) -> None:
                     delete_thread(f"user:{user_id}")   # erase durable conversation too (US-004)
                     from src.logging_db import delete_all_feedback
                     delete_all_feedback(user_id)   # erase all recommendation_feedback rows too (US-004)
+                    from src.auth_persistence import clear_token
+                    clear_token()   # the persistent login cookie is part of "everything" too (Phase 4 step 4)
                     st.session_state.pop("_prefs_cache", None)
                     st.success(t("profile_deleted", locale))
                     st.rerun()
