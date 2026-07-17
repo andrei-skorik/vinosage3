@@ -14,5 +14,19 @@ build/
 .venv-wsl/
 .venv/
 venv/
-docs/
+docs/*
+!docs/phase3/
+!docs/phase3.1/
+!docs/PHASE3_HANDOFF.md
+
+# Only the task specs themselves are tracked — reference/example code
+# snapshots bundled alongside them (app.py, checkpointer.py, tests, etc.)
+# are historical scratch, not live source, and would just drift from the
+# real src/ over time.
+docs/phase3/**
+docs/phase3.1/**
+!docs/phase3/*/
+!docs/phase3.1/*/
+!docs/phase3/*/CLAUDE_CODE_TASK.md
+!docs/phase3.1/*/CLAUDE_CODE_TASK.md
 CLAUDE.md
