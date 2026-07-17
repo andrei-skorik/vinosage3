@@ -5,7 +5,8 @@
 A personal AI wine mentor for an online wine shop.
 Teaches wine concepts, remembers your taste and conversations across sessions
 and restarts, recommends bottles from a live 1289-item catalog — grounded in
-catalog evidence, never invented — and takes questions typed or spoken.
+catalog evidence, never invented — and takes questions typed or spoken. Log in once — your session, taste
+profile, and full conversation survive browser refreshes and server restarts.
 
 Built on a hand-wired LangGraph `StateGraph` with 7 specialised tools,
 multi-query RAG with RRF fusion, durable per-user taste memory and chat
@@ -13,7 +14,9 @@ history in Supabase Postgres, voice input via Whisper, and a 👍/👎 feedback
 loop that both refines future recommendations and excludes wines you've
 already rejected.
 
-Supports 4 languages (EN / DE / RU / FI), includes rate limiting (leak-free),
+Supports 4 languages (EN / DE / RU / FI) end-to-end — including food-query
+detection with German word forms and Russian/Finnish stem matching — and
+includes rate limiting (leak-free),
 daily cost caps, prompt-injection guard, LangSmith observability, and full
 logging to Supabase — with an admin panel showing per-wine feedback and
 acceptance-rate trends alongside the usual catalog/cost/security views.
@@ -23,6 +26,55 @@ Supabase pgvector · OpenRouter (chat, embeddings, Whisper STT) · Pydantic v2 �
 rapidfuzz · pytest · LangSmith
 
 ![VinoSage chat screenshot](screenshots/chat.png)
+
+## What's new in v3.1
+
+v3.0 shipped the features; v3.1 is what happened when a human ran a
+structured smoke campaign against them — plus the top of the backlog.
+**Eight real defects** were found on the live system (none reproducible by
+the mocked unit suite — every one lived on a seam: LLM↔tool, catalog
+data↔matcher, widget lifecycle↔rerun, UI↔profile), each fixed with a
+regression test. Then four backlog items landed on top.
+
+### New capabilities
+
+| Capability | Detail |
+|------------|--------|
+| **Login survives refresh** | The Supabase refresh token is kept in a browser cookie (read natively via `st.context.cookies`, written by a staged one-shot JS snippet — `src/auth_persistence.py`). Tokens rotate on every restore; logout and "Forget me" clear the cookie. F5 now restores both the session *and* the durable chat in one go. |
+| **True logout** | Logging out immediately resets to the pristine anonymous state — chat, profile, caches, metrics, even the age gate (`src/ui/session_reset.py`) — a privacy fix for shared machines. Explicit-list reset, never a blanket clear (the staged cookie deletion must survive it). |
+| **GDPR-complete "Forget me"** | Now erases *everything*: taste profile, durable conversation thread, feedback rows, the login cookie, **and** the conversation history — `query_logs` rows are anonymized (`user_id → NULL`) and content-scrubbed (`'[erased]'`) rather than deleted, so the shared daily cost cap can't be reset by forgetting yourself. |
+| **Multilingual food detection** | The 30 dishes added in v3.0's keyword-sync repair are now recognised in all four languages: explicit German singular/plural forms, and stem matching for Russian and Finnish (new `_FI_FOOD_STEMS`, mirroring the proven RU mechanism — "keittoon", "пельменям" and "Suppen" all route correctly). |
+| **Voice spend in the cost cap** | Whisper transcription is billed per audio second; those costs are now recorded (`sql/10_stt_usage.sql`) and counted toward the €1/day cap alongside token spend — the two sources sum independently and degrade independently. |
+| **Anon-thread housekeeping** | One admin-panel button sweeps the ephemeral `anon:*` checkpointer threads (safe by construction — anonymous sessions never read checkpoint state back). |
+
+### Smoke-campaign fixes (all with regression tests)
+
+| Defect | Fix |
+|--------|-----|
+| LLM skipped `recommend_for_me` on repeat requests and re-presented stale wines from history | Three layers: an `agent_instruction` in the tool's success payload ("present ONLY these"), a hardened prompt block, and a per-turn router nudge |
+| A 👎 could overwrite an explicitly preferred grape/style | §5.4 guard enforced: explicit positive preference wins over a single downvote |
+| Toggling a rating off wiped manually-set preferences | Un-fold is now the exact inverse of fold — each fold records its delta (provenance in the feedback row's `reason` column) and toggle-off reverts exactly that |
+| Typographic quotes in a catalog title ('White Ash') silently lost its feedback buttons | Title matching is typography-normalized on both sides |
+| Whisper hallucinated "." on silent audio and burned a full LLM turn | Punctuation-only transcripts normalize to empty → the "couldn't hear anything" toast |
+| `st.audio_input` showed a stale-upload error between voice turns | Widget-key rotation mounts a fresh recorder after each consumed recording |
+| Anonymous 👍/👎 clicks wrote unattributable NULL-user rows | Feedback is login-gated end to end (UI hint + code gate), resolving a spec self-contradiction |
+| An eval test gated on a pre-v2.0 tool choice and failed on legitimate ambiguity | Split: named-wines comparisons strictly require `compare_wines`; variety comparisons accept either tool, gating only on zero invented wines |
+
+Plus the inherited v2.0 test-coverage gaps closed (locale-file parity with
+placeholder checks, LangSmith-absence, cost-cap boundaries incl. pinned
+fail-open, anonymous-feedback invariant, preference-extraction
+false-positive regression) — **292 total unit tests**.
+
+### New in v3.1: `sql/10_stt_usage.sql`
+
+Apply after `sql/01`–`09` (and before deploying the voice-cost code — the
+write path degrades silently without it):
+
+| File | Creates |
+|------|---------|
+| `sql/10_stt_usage.sql` | `stt_usage` — per-transcription seconds + cost, summed into the daily cap |
+
+---
 
 ## What's new in v3.0
 
@@ -44,7 +96,7 @@ and a smarter recommendation loop.
 | **Admin feedback insights** | New admin-panel section: per-wine 👍/👎 counts + down-share (a purchasing signal for the shop) and an overall acceptance rate with a trend-by-date chart and breakdowns by model/locale — a free, continuous quality signal alongside the offline Ragas evals (`src/feedback_insights.py`). |
 | **Rate-limit memory-leak fix** | `src/ratelimit.py`'s in-memory sliding-window dict used to grow one entry per browser session forever. A lazy periodic sweep now purges any session whose window has fully expired, bounding memory on long-lived deployments — with zero change to allow/block semantics. |
 | **Anti-hallucination defense-in-depth repair** | The triple food-keyword defense (three deliberately independent copies, one per layer) had quietly drifted apart over time — 30 dishes (prawn, crab, soup, stew, scallop, …) were recognised by the catalog tool but not by the two evidence-filter layers or the router. Fixed and locked behind a sync test that fails the build on any future drift. |
-| **198 total unit tests** | +47 new tests across the five v3.0 steps (checkpointer, rate-limit, keyword-sync, transcription, feedback exclusion/insights), all mocked — no real DB/LLM/audio calls required to run the suite. |
+| **Unit-test growth** | +47 new tests across the five v3.0 steps (checkpointer, rate-limit, keyword-sync, transcription, feedback exclusion/insights), all mocked — no real DB/LLM/audio calls required to run the suite. (v3.1 later grew the suite to 292.) |
 
 ### New environment variables (v3.0, all optional)
 
@@ -63,7 +115,8 @@ This creates the LangGraph-managed `checkpoints` / `checkpoint_blobs` /
 `checkpoint_writes` / `checkpoint_migrations` tables. It is intentionally
 **not** a numbered `sql/` file — those tables are versioned by the
 `langgraph-checkpoint-postgres` library itself, not by this project's schema.
-No other v3.0 step added or changed any SQL (`sql/01`–`09` untouched).
+No other v3.0 step added or changed any SQL; v3.1 later added `sql/10`
+(`sql/01`–`09` remain untouched throughout, per project convention).
 
 ---
 
@@ -271,7 +324,10 @@ Copy `.env.example` to `.env` and fill in every value.
 
 ## Database Setup
 
-Applies three SQL files to your Supabase project via the Management API.
+Applies the numbered SQL files (`sql/01`–`10`, in order) to your Supabase
+project via the Management API. Ordering matters twice: `sql/09` must be
+live before the v2.0 tools log anything, and `sql/10` before voice costs
+are recorded.
 Requires `SUPABASE_ACCESS_TOKEN` (create at https://supabase.com/dashboard/account/tokens)
 and `SUPABASE_PROJECT_REF` (the `<ref>` in `https://<ref>.supabase.co`) — set both in `.env`.
 
@@ -327,7 +383,8 @@ Full eval suite (Ragas): `pip install -r requirements-eval.txt` (Linux/CI only; 
 
 Unit tests cover all 7 tools, RAG, i18n, the guard, taste-profile/preferences
 logic, the durable checkpointer, rate limiting, food-keyword sync, voice
-transcription, and feedback exclusion/insights — 198 tests, ~10-15 s, all
+transcription, feedback exclusion/insights, auth persistence, session
+reset, multilingual routing, and locale parity — 292 tests, ~25 s, all
 mocked (no real DB/LLM/audio calls needed).
 Integration eval tests (US-001..011 + 8 edge cases) are excluded by default.
 
@@ -364,20 +421,6 @@ Streamlit Cloud sets these as environment variables, which `src/config.py` (and 
 
 ---
 
-## Cron: Reconcile Embeddings
-
-`.github/workflows/reconcile.yml` runs every night at 03:00 UTC.
-It calls `scripts/seed.py` which:
-1. Re-upserts `data/WineDataset.csv` (idempotent)
-2. Embeds any wines where `needs_embedding = true`
-
-To trigger manually: **Actions → Reconcile catalog → Run workflow**.
-
-Required GitHub Secrets (same names as `.env`):
-`OPENROUTER_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`, `ADMIN_PASSWORD`.
-
----
-
 ## Project Structure
 
 ```
@@ -396,9 +439,10 @@ vinosage/
 │   ├── agent.py              # System prompt, message building, retry helpers
 │   ├── graph.py               # LangGraph StateGraph (guard→prefs→router→agent→extract)
 │   ├── guard.py                # Prompt/memory-injection detection
-│   ├── preferences.py          # Taste-profile read/write + feedback fold + exclusion
+│   ├── preferences.py          # Taste-profile read/write + provenance-tracked feedback fold + exclusion
 │   ├── checkpointer.py         # PostgresSaver / MemorySaver durable chat memory (v3.0)
-│   ├── transcribe.py           # Whisper STT via OpenRouter (v3.0)
+│   ├── transcribe.py           # Whisper STT via OpenRouter (v3.0; cost + silence handling v3.1)
+│   ├── auth_persistence.py     # Login-across-refresh: cookie read/staged write (v3.1)
 │   ├── feedback_insights.py    # Pure aggregation for admin feedback panel (v3.0)
 │   ├── i18n.py               # t(key, locale) translation helper
 │   ├── ratelimit.py          # Sliding-window rate limit + cost cap (leak-free)
@@ -415,6 +459,7 @@ vinosage/
 │       ├── chat_view.py
 │       ├── sidebar.py
 │       ├── auth_view.py
+│       ├── session_reset.py           # Logout → pristine anonymous state (v3.1)
 │       └── admin.py                   # Includes per-wine feedback + acceptance-rate insights
 │
 ├── scripts/
@@ -461,12 +506,21 @@ vinosage/
 │   ├── test_food_kws_sync.py      # v3.0 step 3
 │   ├── test_transcribe.py         # v3.0 step 4
 │   ├── test_step5_feedback.py     # v3.0 step 5
+│   ├── test_hardening.py          # locale parity, LangSmith absence, cost-cap bounds
+│   ├── test_feedback_anonymous.py # anon users never write feedback
+│   ├── test_extract_preferences_regression.py
+│   ├── test_title_matching.py     # typography-safe feedback buttons
+│   ├── test_food_query_multilingual.py  # DE/RU/FI routing (v3.1)
+│   ├── test_auth_persistence.py   # cookie flows + token rotation (v3.1)
+│   ├── test_session_reset.py      # logout hygiene (v3.1)
+│   ├── test_logging_db.py         # feedback deletion + history erasure (v3.1)
 │   └── eval/
 │       └── test_agent_eval.py  # integration, requires real API
 │
-└── .github/workflows/
-    ├── reconcile.yml         # nightly cron
-    └── tests.yml             # CI on push/PR
+└── docs/                      # Handoff record + per-step task briefs (Phase 3 / 3.1)
+    ├── PHASE3_HANDOFF.md      # Full project record: decisions, smoke campaigns, backlog
+    ├── phase3/                # Task briefs, steps 1–6h
+    └── phase3.1/              # Task briefs, steps 1–4c
 ```
 
 ---
@@ -485,3 +539,6 @@ vinosage/
 | Thread ID = `user:{user_id}` / `anon:{session_id}` | Stable across refresh/restart for logged-in users; anonymous threads are ephemeral by construction, no separate code path needed |
 | Feedback exclusion narrows, never invents | `recommend_for_me` only removes 👎-rated wines from the candidate set — grounding guarantee holds even as personalisation deepens |
 | Three independent food-keyword copies + a sync test | Anti-hallucination defense-in-depth is deliberately not shared/merged across layers; the test (not code review) is what keeps them from drifting apart again |
+| Refresh token in a cookie, read natively, written via staged JS | `st.context.cookies` works on the very first run (no component-mount races); writes are staged around reruns so the browser actually receives them; tokens rotate on every restore |
+| Forget-me anonymizes history instead of deleting it | Hard-deleting `query_logs` would cascade into `token_usage` and let a user reset their contribution to the shared daily cost cap; anonymize + content-scrub erases the person, keeps the accounting |
+| Fold provenance in the feedback row's `reason` column | Makes un-fold the exact inverse of fold with zero schema change — retracting a rating can never destroy manually-set preferences |
