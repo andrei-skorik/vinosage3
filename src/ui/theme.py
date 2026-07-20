@@ -248,7 +248,9 @@ a { color: var(--wine); }
 }
 
 /* ── Task 5.2: wine recommendation cards ───────────────────────────────── */
-/* Keys are per-wine (wine_card_<wine_id>), so match the "st-key-wine_card_"
+/* Keys are per-(query, wine) — wine_card_<query_id>_<wine_id>, since the same
+   wine can be recommended again in a later turn and Streamlit element keys
+   must be unique across the whole page — so match the "st-key-wine_card_"
    prefix rather than a single fixed class. */
 div[class*="st-key-wine_card_"] {
   background: var(--wine-tint); border-radius: var(--radius);

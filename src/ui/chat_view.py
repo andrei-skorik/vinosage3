@@ -450,7 +450,7 @@ def render_feedback_buttons(
         elif current == "down":
             color_map[mk_d] = "#dc3545"
 
-        with st.container(border=True, key=f"wine_card_{wine_id}"):
+        with st.container(border=True, key=f"wine_card_{query_id}_{wine_id}"):
             col_label, col_up, col_down = st.columns([6, 1, 1], vertical_alignment="center")
 
             meta_parts = [p for p in (w.get("region") or w.get("country"),) if p]
