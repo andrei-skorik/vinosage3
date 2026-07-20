@@ -10,6 +10,7 @@ import streamlit.components.v1 as components
 
 from src.config import DEFAULT_LOCALE
 from src.i18n import t
+from src.ui.theme import inject_css, inject_sidebar_width_watcher
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
@@ -19,20 +20,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Theme accent via CSS injection ────────────────────────────────────────────
-st.markdown(
-    """
-    <style>
-    [data-testid="stChatInput"] textarea:focus {
-        border-color: #7B1E3B !important;
-        box-shadow: 0 0 0 1px #7B1E3B !important;
-    }
-    .stButton > button { border-radius: 6px; }
-    div[data-testid="stStatusWidget"] { display: none; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# ── Custom stylesheet (ui/theme.py — one <style> block per docs/vinosage-ui-tasks.md)
+inject_css()
+inject_sidebar_width_watcher()
 
 # ── Session state defaults ────────────────────────────────────────────────────
 _DEFAULTS: dict = {
@@ -80,6 +70,14 @@ from src.ui.chat_view import (  # noqa: E402
 from src.ui.sidebar import render_sidebar  # noqa: E402
 
 _HISTORY_WINDOW = 10
+
+# Compact bottom-bar language options (Task 3.2) — kept in sync with the same
+# `locale` session_state key the sidebar used to own before its selector moved here.
+# Flag emoji dropped: Windows renders regional-indicator flag sequences as
+# plain two-letter text (e.g. literal "GB") instead of an actual flag glyph,
+# which just duplicated the language code next to itself.
+_LOCALE_SHORT = {"en": "EN", "de": "DE", "ru": "RU", "fi": "FI"}
+_LOCALE_CODES = list(_LOCALE_SHORT.keys())
 
 
 _HIST_FOOD_KWS = {
@@ -278,6 +276,23 @@ def main() -> None:
     # Inside a container it would render inline (wrong position).
     chat_input = st.chat_input(t("chat_placeholder", locale))
 
+    # ── Bottom bar, left: language selector (Task 3.2) ─────────────────────────
+    # Pinned next to chat_input via CSS (.st-key-bottom_bar_lang, ui/theme.py).
+    # Moved out of the sidebar (Task 2.1) so it never scrolls out of reach.
+    with st.container(key="bottom_bar_lang"):
+        _lang_idx = _LOCALE_CODES.index(locale) if locale in _LOCALE_CODES else 0
+        _selected_locale = st.selectbox(
+            t("language_label", locale),
+            options=_LOCALE_CODES,
+            format_func=lambda code: _LOCALE_SHORT[code],
+            index=_lang_idx,
+            label_visibility="collapsed",
+            key="bottom_locale_select",
+        )
+    if _selected_locale != locale:
+        st.session_state.locale = _selected_locale
+        st.rerun()
+
     # ── Voice input (Phase 3, step 4) ──────────────────────────────────────────
     # st.audio_input keeps returning the SAME recording on every rerun, so we
     # fingerprint it and transcribe each recording exactly once. The rate limit
@@ -294,11 +309,14 @@ def main() -> None:
     # user may retry it after the window.
     voice_prompt: str | None = None
     _voice_gen = st.session_state.setdefault("_voice_widget_gen", 0)
-    with st.popover(f"🎤 {t('voice_input_label', locale)}"):
-        _audio = st.audio_input(
-            t("voice_record_label", locale),
-            key=f"voice_recorder_{_voice_gen}",
-        )
+    with st.container(key="bottom_bar_voice"):
+        # Label text stays for accessibility but is hidden via CSS
+        # (.st-key-bottom_bar_voice) — icon-only per the follow-up request.
+        with st.popover(t("voice_input_label", locale), icon=":material/mic:", type="primary"):
+            _audio = st.audio_input(
+                t("voice_record_label", locale),
+                key=f"voice_recorder_{_voice_gen}",
+            )
     if _audio is not None:
         _digest = hashlib.sha256(_audio.getvalue()).hexdigest()
         if st.session_state.get("_last_voice_digest") != _digest:
@@ -383,11 +401,11 @@ def main() -> None:
 
             # Store & display user turn
             st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user", avatar=user_avatar):
+            with st.chat_message("user", avatar=user_avatar or "👤"):
                 st.markdown(prompt)
 
             # ── Agent call with 3-step progress stepper ───────────────────────
-            with st.chat_message("assistant"):
+            with st.chat_message("assistant", avatar="🍷"):
                 # Own placeholder OUTSIDE st.status — the status widget's body
                 # only shows the current step's caption, so anything rendered
                 # inside it (like the badge) gets visually replaced once the

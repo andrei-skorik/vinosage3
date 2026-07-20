@@ -10,9 +10,6 @@ from src.preferences import EMPTY_PROFILE, delete_preferences, get_preferences, 
 from src.ui.auth_view import render_auth_forms, render_history_view, render_profile_widget
 from src.ui.chat_view import export_messages_csv, export_messages_json
 
-_LOCALE_FLAGS = {"en": "🇬🇧 English", "de": "🇩🇪 Deutsch", "ru": "🇷🇺 Русский", "fi": "🇫🇮 Suomi"}
-_LOCALE_CODES = list(_LOCALE_FLAGS.keys())
-
 _EXPERTISE_LEVELS = ["beginner", "enthusiast", "connoisseur"]
 
 
@@ -193,90 +190,68 @@ def render_sidebar() -> None:
     locale = st.session_state.get("locale", DEFAULT_LOCALE)
 
     with st.sidebar:
+        # 1. Logo block
         st.markdown(f"# 🍷 {t('app_title', locale)}")
         st.caption(t("app_tagline", locale))
         st.divider()
 
-        # Account: profile widget if logged in, else login/register forms.
-        # Optional — registering only unlocks avatar personalisation, it does
-        # not gate chat access (the separate age gate handles that).
+        # 2. Account card: profile (avatar + name + logout) if logged in, else
+        # login/register forms. Optional — registering only unlocks avatar
+        # personalisation, it does not gate chat access (age gate handles that).
+        with st.container(border=True, key="account_card"):
+            if st.session_state.get("auth"):
+                render_profile_widget(locale)
+            else:
+                with st.expander(f"👤 {t('account_header', locale)}"):
+                    render_auth_forms(locale)
+        st.divider()
+
+        # 3. My conversations
         if st.session_state.get("auth"):
-            render_profile_widget(locale)
             render_history_view(locale)
-        else:
-            with st.expander(f"👤 {t('account_header', locale)}"):
-                render_auth_forms(locale)
-        st.divider()
+            st.divider()
 
+        # 4. Taste profile
         render_taste_profile(locale)
-        st.divider()
-
-        # Language selector
-        st.markdown(f"**{t('language_label', locale)}**")
-        current_idx = _LOCALE_CODES.index(locale) if locale in _LOCALE_CODES else 0
-        selected = st.selectbox(
-            label=t("language_label", locale),
-            options=_LOCALE_CODES,
-            format_func=lambda code: _LOCALE_FLAGS[code],
-            index=current_idx,
-            label_visibility="collapsed",
-            key="locale_select",
-        )
-        if selected != st.session_state.get("locale"):
-            st.session_state.locale = selected
-            st.rerun()
-
         st.divider()
 
         # Answer speed — the only model choice end users ever see (SPEC §5.6).
         # Real model names/temperature live in the admin dev panel only; a dev
-        # override (if set) takes precedence regardless of this radio's value.
+        # override (if set) takes precedence regardless of this control's value.
         st.markdown(f"**{t('answer_mode_label', locale)}**")
         _MODE_OPTIONS = ["quick", "indepth"]
         current_mode = st.session_state.get("answer_mode", "quick")
-        mode_idx = _MODE_OPTIONS.index(current_mode) if current_mode in _MODE_OPTIONS else 0
-        selected_mode = st.radio(
-            label=t("answer_mode_label", locale),
-            options=_MODE_OPTIONS,
-            format_func=lambda m: t(f"answer_mode_{m}", locale),
-            index=mode_idx,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="answer_mode_radio",
-        )
-        if selected_mode != st.session_state.get("answer_mode"):
+        with st.container(key="answer_speed_wrap"):
+            selected_mode = st.segmented_control(
+                label=t("answer_mode_label", locale),
+                options=_MODE_OPTIONS,
+                format_func=lambda m: t(f"answer_mode_{m}", locale),
+                default=current_mode,
+                label_visibility="collapsed",
+                key="answer_speed",
+            )
+        if selected_mode and selected_mode != st.session_state.get("answer_mode"):
             st.session_state.answer_mode = selected_mode
 
         st.divider()
 
-        # Session metrics
+        # 5. Session metrics — compact card (Task 6)
         tokens_in  = st.session_state.get("session_tokens_in", 0)
         tokens_out = st.session_state.get("session_tokens_out", 0)
         cost_micros = st.session_state.get("session_cost_micros", 0)
         latency_ms  = st.session_state.get("last_latency_ms", 0)
 
-        col1, col2 = st.columns(2)
-        col1.metric(t("tokens_in_label", locale),  f"{tokens_in:,}")
-        col2.metric(t("tokens_out_label", locale), f"{tokens_out:,}")
+        with st.container(border=True, key="metrics_card"):
+            col1, col2 = st.columns(2)
+            col1.metric(t("tokens_in_label", locale),  f"{tokens_in:,}")
+            col2.metric(t("tokens_out_label", locale), f"{tokens_out:,}")
 
-        # Full-width (not 2-col like tokens above) — "€0.0072" + a long label
-        # gets clipped to "€0.0..." in a half-width sidebar column.
-        cost_eur = cost_micros / 1_000_000
-        st.metric(t("session_cost_label", locale), f"€{cost_eur:.4f}")
-        if latency_ms:
-            st.metric(t("latency_label", locale), t("latency_value", locale, ms=latency_ms))
-
-        st.divider()
-
-        # New chat
-        if st.button(f"🗑 {t('new_chat', locale)}", use_container_width=True):
-            st.session_state.messages = []
-            st.session_state.session_tokens_in = 0
-            st.session_state.session_tokens_out = 0
-            st.session_state.session_cost_micros = 0
-            st.session_state.last_latency_ms = 0
-            st.rerun()
-
+            # Full-width (not 2-col like tokens above) — "€0.0072" + a long label
+            # gets clipped to "€0.0..." in a half-width sidebar column.
+            cost_eur = cost_micros / 1_000_000
+            st.metric(t("session_cost_label", locale), f"€{cost_eur:.4f}")
+            if latency_ms:
+                st.metric(t("latency_label", locale), t("latency_value", locale, ms=latency_ms))
         st.divider()
 
         # Export current session's conversation
@@ -301,14 +276,11 @@ def render_sidebar() -> None:
             )
             st.divider()
 
-        # Help & disclaimer
+        # 6. How to use VinoSage + Admin — muted, just above the pinned New chat.
         with st.expander(f"❓ {t('help_header', locale)}"):
             st.markdown(t("help_body", locale))
             st.caption(t("disclaimer", locale))
 
-        st.divider()
-
-        # Admin gate
         if not st.session_state.get("admin_unlocked"):
             with st.expander(f"🔒 {t('admin_header', locale)}"):
                 pwd = st.text_input(
@@ -328,3 +300,20 @@ def render_sidebar() -> None:
             if st.button("🔓 Lock admin", key="admin_lock_btn"):
                 st.session_state.admin_unlocked = False
                 st.rerun()
+
+        st.divider()
+
+        # 7. New chat — fixed in line with the chat input row (CSS, ui/theme.py).
+        if st.button(
+            t("new_chat", locale),
+            icon=":material/refresh:",
+            use_container_width=True,
+            type="primary",
+            key="new_chat_btn",
+        ):
+            st.session_state.messages = []
+            st.session_state.session_tokens_in = 0
+            st.session_state.session_tokens_out = 0
+            st.session_state.session_cost_micros = 0
+            st.session_state.last_latency_ms = 0
+            st.rerun()

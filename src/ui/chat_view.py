@@ -15,26 +15,32 @@ from src.i18n import t, tlist
 _EXAMPLE_COUNT = 3
 
 
+_SUGGESTION_ICONS = ("🍷", "🍾")
+
+
 def render_empty_state(locale: str) -> None:
     """Render the welcome screen. Clicked button label is written to queued_prompt."""
-    st.markdown(f"## {t('welcome_title', locale)}")
-    st.markdown(t("welcome_body", locale))
-    st.markdown("")
+    with st.container(key="welcome"):
+        st.markdown(f"## {t('welcome_title', locale)}")
+        st.markdown(t("welcome_body", locale))
+        st.markdown("")
 
-    # Cache picks so button keys map to the same labels across reruns.
-    cache_key = f"_welcome_picks_{locale}"
-    if cache_key not in st.session_state:
-        pool = tlist("welcome_examples", locale)
-        if not pool:
-            return
-        st.session_state[cache_key] = random.sample(pool, min(_EXAMPLE_COUNT, len(pool)))
+        # Cache picks so button keys map to the same labels across reruns.
+        cache_key = f"_welcome_picks_{locale}"
+        if cache_key not in st.session_state:
+            pool = tlist("welcome_examples", locale)
+            if not pool:
+                return
+            st.session_state[cache_key] = random.sample(pool, min(_EXAMPLE_COUNT, len(pool)))
 
-    picks: list[str] = st.session_state[cache_key]
-    cols = st.columns(len(picks))
-    for i, (col, label) in enumerate(zip(cols, picks)):
-        with col:
-            if st.button(label, use_container_width=True, key=f"example_{i}"):
-                st.session_state.queued_prompt = label
+        picks: list[str] = st.session_state[cache_key]
+        with st.container(key="suggestions"):
+            cols = st.columns(len(picks))
+            for i, (col, label) in enumerate(zip(cols, picks)):
+                icon = _SUGGESTION_ICONS[i % len(_SUGGESTION_ICONS)]
+                with col:
+                    if st.button(f"{icon} {label}", use_container_width=True, key=f"example_{i}"):
+                        st.session_state.queued_prompt = label
 
 
 def _format_filter_chips(filter_used: dict[str, Any]) -> str:
@@ -444,28 +450,38 @@ def render_feedback_buttons(
         elif current == "down":
             color_map[mk_d] = "#dc3545"
 
-        col_label, col_up, col_down = st.columns([6, 1, 1])
-        col_label.caption(w.get("title", ""))
+        with st.container(border=True, key=f"wine_card_{wine_id}"):
+            col_label, col_up, col_down = st.columns([6, 1, 1], vertical_alignment="center")
 
-        # Hidden anchor spans are injected in each column.  Pure-CSS <style>
-        # via st.markdown is scoped by React and can't reliably reach siblings,
-        # so styling is done via JS below.  The base CSS (injected into <head>
-        # once per session) collapses the stMarkdownContainer wrappers so the
-        # spans never cause a layout shift.
-        with col_up:
-            # Button first so it sits at the top of the column, aligned with
-            # the wine name label.  The anchor span follows (collapsed to zero
-            # height by the base CSS injected into <head> below).
-            if st.button("👍", key=f"fb_up_{query_id}_{wine_id}", help=t("feedback_up", locale)):
-                _toggle(w, "up")
-                st.rerun()
-            st.markdown(f'<span class="{mk_u}"></span>', unsafe_allow_html=True)
+            meta_parts = [p for p in (w.get("region") or w.get("country"),) if p]
+            price = w.get("price_eur")
+            if price is not None:
+                meta_parts.append(f"€{price:.2f}")
+            meta = " · ".join(meta_parts)
+            label_md = f"**{w.get('title', '')}**"
+            if meta:
+                label_md += f"  \n:gray[{meta}]"
+            col_label.markdown(label_md)
 
-        with col_down:
-            if st.button("👎", key=f"fb_down_{query_id}_{wine_id}", help=t("feedback_down", locale)):
-                _toggle(w, "down")
-                st.rerun()
-            st.markdown(f'<span class="{mk_d}"></span>', unsafe_allow_html=True)
+            # Hidden anchor spans are injected in each column.  Pure-CSS <style>
+            # via st.markdown is scoped by React and can't reliably reach siblings,
+            # so styling is done via JS below.  The base CSS (injected into <head>
+            # once per session) collapses the stMarkdownContainer wrappers so the
+            # spans never cause a layout shift.
+            with col_up:
+                # Button first so it sits at the top of the column, aligned with
+                # the wine name label.  The anchor span follows (collapsed to zero
+                # height by the base CSS injected into <head> below).
+                if st.button("👍", key=f"fb_up_{query_id}_{wine_id}", help=t("feedback_up", locale)):
+                    _toggle(w, "up")
+                    st.rerun()
+                st.markdown(f'<span class="{mk_u}"></span>', unsafe_allow_html=True)
+
+            with col_down:
+                if st.button("👎", key=f"fb_down_{query_id}_{wine_id}", help=t("feedback_down", locale)):
+                    _toggle(w, "down")
+                    st.rerun()
+                st.markdown(f'<span class="{mk_d}"></span>', unsafe_allow_html=True)
 
     color_map_json = json.dumps(color_map)
     mines_json = json.dumps(mines)
@@ -602,7 +618,7 @@ def render_chat_history(
 ) -> None:
     for msg in messages:
         role = msg["role"]
-        avatar = user_avatar if role == "user" else None
+        avatar = (user_avatar or "👤") if role == "user" else "🍷"
         with st.chat_message(role, avatar=avatar):
             if role == "assistant":
                 # Badge first — mirrors the live view, where it appears during
