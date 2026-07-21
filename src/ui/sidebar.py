@@ -283,13 +283,34 @@ def render_sidebar() -> None:
 
         if not st.session_state.get("admin_unlocked"):
             with st.expander(f"🔒 {t('admin_header', locale)}"):
-                pwd = st.text_input(
-                    t("admin_password_label", locale),
-                    type="password",
-                    key="admin_pwd_input",
-                    autocomplete="current-password",
-                )
-                if st.button(t("admin_unlock", locale), key="admin_unlock_btn"):
+                # st.form (not a bare text_input + button): Enter alone used to
+                # only commit the text_input's own value — Streamlit's "Press
+                # Enter to apply" hint promised nothing more, but read as "this
+                # logs in," and only the separate Unlock click actually did.
+                # A form makes Enter submit it (same as clicking Unlock) and
+                # Streamlit swaps the hint to the accurate "Press Enter to
+                # submit form" — same fix already used by the login form.
+                with st.form("admin_unlock_form", border=False):
+                    pwd = st.text_input(
+                        t("admin_password_label", locale),
+                        type="password",
+                        key="admin_pwd_input",
+                        # "current-password" made Chrome suggest saved site
+                        # logins (unrelated emails) in this field; switching to
+                        # "new-password" stopped that but traded it for Chrome's
+                        # strong-password generator popup — the field read as
+                        # "user is creating a new account password." Neither is
+                        # true: this isn't an account credential at all, just an
+                        # app-level secret masked for privacy. "one-time-code"
+                        # is the standard token for exactly that case — Chrome
+                        # doesn't associate it with saved credentials OR the
+                        # generator, while type="password" still masks it.
+                        autocomplete="one-time-code",
+                    )
+                    submitted = st.form_submit_button(
+                        t("admin_unlock", locale), key="admin_unlock_btn"
+                    )
+                if submitted:
                     if pwd == ADMIN_PASSWORD:
                         st.session_state.admin_unlocked = True
                         st.rerun()
