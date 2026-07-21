@@ -357,6 +357,40 @@ def _toggle_feedback(
         st.toast(t("feedback_saved", locale))
 
 
+def _hydrate_feedback_ratings(user_id: str, ratings: dict[str, str | None]) -> None:
+    """Back-fill `ratings` from `recommendation_feedback`, exactly once per
+    session (docs/phase3.1/fix_feedback_hydration).
+
+    Extracted from render_feedback_buttons so it's unit-testable without a
+    Streamlit context (same rationale as _toggle_feedback). `ratings` is a
+    same-session accelerator only — clicks keep it current via
+    _toggle_feedback, but a FRESH session (logout->login, or a plain F5
+    restoring the durable thread via the checkpointer) starts with none,
+    even though the DB still holds every prior rating. Without this,
+    rehydrated cards render grey — not because the rating was lost, but
+    because it was never read back into the UI.
+
+    Guarded by `_feedback_hydrated` — the SAME key
+    `src/ui/session_reset.py::reset_to_anonymous` clears on logout/forget-me,
+    so a fresh login re-hydrates instead of trusting a stale "already done"
+    flag carried over from the previous session in the same browser tab.
+    Collects every query_id across the WHOLE session's message history (not
+    just the turn currently rendering) so one hydration covers the entire
+    rehydrated conversation.
+    """
+    if st.session_state.get("_feedback_hydrated"):
+        return
+
+    from src.logging_db import get_feedback_ratings
+
+    all_query_ids = [
+        m.get("query_id") for m in st.session_state.get("messages", []) if m.get("query_id")
+    ]
+    loaded = get_feedback_ratings(user_id, all_query_ids)
+    ratings.update({_rating_key(qid, wid): rating for (qid, wid), rating in loaded.items()})
+    st.session_state["_feedback_hydrated"] = True
+
+
 def render_feedback_buttons(
     tool_calls: list[dict[str, Any]],
     query_id: str | None,
@@ -386,7 +420,6 @@ def render_feedback_buttons(
     if not wines:
         return
 
-    from src.logging_db import get_latest_ratings
     import streamlit.components.v1 as components
 
     session_id = st.session_state.get("session_id", "")
@@ -404,16 +437,8 @@ def render_feedback_buttons(
 
     if "wine_ratings" not in st.session_state:
         st.session_state["wine_ratings"] = {}
-        st.session_state["wine_ratings_loaded"] = False
     ratings: dict[str, str | None] = st.session_state["wine_ratings"]
-
-    # Load the user's existing ratings from the DB exactly once per session so
-    # that wines rated in previous conversations appear with the correct button
-    # colour and don't generate a redundant DB write on the next click.
-    if user_id and not st.session_state.get("wine_ratings_loaded"):
-        loaded = get_latest_ratings(user_id)
-        ratings.update(loaded)
-        st.session_state["wine_ratings_loaded"] = True
+    _hydrate_feedback_ratings(user_id, ratings)
 
     def _fold_cache(wine: dict[str, Any], direction: str, delta: dict[str, list[str]] | None = None) -> None:
         """Mirror fold_feedback's logic onto _prefs_cache in-place.

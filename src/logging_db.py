@@ -12,6 +12,8 @@ from uuid import uuid4
 
 log = logging.getLogger(__name__)
 
+_BATCH_SIZE = 200        # respects URL length limits on .in_() filters (same convention as src/ui/admin.py)
+
 
 def _db():
     from src.catalog import get_service_db
@@ -257,36 +259,48 @@ def get_feedback_reason(*, user_id: str, query_id: str | None, wine_id: str) -> 
         return None
 
 
-def get_latest_ratings(user_id: str) -> dict[str, str]:
-    """Return {wine_id: rating} for the user's most recent rating per wine.
+def get_feedback_ratings(user_id: str, query_ids: list[str]) -> dict[tuple[str, str], str]:
+    """Return {(query_id, wine_id): rating} for this user's feedback rows
+    matching the given query_ids.
 
-    Used to pre-populate st.session_state['wine_ratings'] on session start so
-    buttons for previously-rated wines appear with the correct colour without
-    requiring the user to click again.  Fetches at most 500 rows (covers any
-    realistic usage history) and takes the first occurrence of each wine_id
-    (rows are ordered newest-first, so that IS the latest rating).
-    Swallows all exceptions — a read failure returns an empty dict, the UI
-    simply shows uncoloured buttons and writes the rating again on next click.
+    Used to hydrate the feedback-highlight cache when chat history is
+    rehydrated (logout->login, or a plain F5 restoring the durable thread
+    via the checkpointer) — recommendation_feedback is the source of truth;
+    the session-state ratings cache (src/ui/chat_view.py) is only ever a
+    same-session accelerator populated by clicks, which starts empty on a
+    fresh session. Without this, a rehydrated card renders unrated even
+    though the DB still holds its rating.
+
+    Batches query_ids via .in_() (a rehydrated history can hold many turns)
+    at _BATCH_SIZE per call, same convention as src/ui/admin.py. Keyed by
+    (query_id, wine_id) — never wine_id alone, which was the cross-turn
+    highlight leak fixed just before this. Swallows all exceptions and
+    returns {} on failure — a missing highlight is cosmetic, never worth
+    breaking the render over.
     """
+    if not query_ids:
+        return {}
+    out: dict[tuple[str, str], str] = {}
     try:
-        rows = (
-            _db()
-            .table("recommendation_feedback")
-            .select("wine_id,rating")
-            .eq("user_id", user_id)
-            .order("created_at", desc=True)
-            .limit(500)
-            .execute()
-            .data
-        )
-        seen: dict[str, str] = {}
-        for row in rows:
-            wid = str(row.get("wine_id") or "")
-            if wid and wid not in seen:
-                seen[wid] = row["rating"]
-        return seen
+        db = _db()
+        unique_ids = list(dict.fromkeys(query_ids))  # de-dup, preserve order
+        for i in range(0, len(unique_ids), _BATCH_SIZE):
+            batch = unique_ids[i : i + _BATCH_SIZE]
+            rows = (
+                db.table("recommendation_feedback")
+                .select("query_id,wine_id,rating")
+                .eq("user_id", user_id)
+                .in_("query_id", batch)
+                .execute()
+                .data
+            )
+            for row in rows:
+                qid, wid = row.get("query_id"), row.get("wine_id")
+                if qid and wid:
+                    out[(qid, wid)] = row["rating"]
+        return out
     except Exception as exc:
-        log.warning("get_latest_ratings failed: %s", exc)
+        log.warning("get_feedback_ratings failed: %s", exc)
         return {}
 
 

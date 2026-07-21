@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.logging_db import delete_all_feedback, erase_user_history
+from src.logging_db import delete_all_feedback, erase_user_history, get_feedback_ratings
 
 
 def test_delete_all_feedback_deletes_by_user_id_only():
@@ -83,6 +83,74 @@ def test_erase_user_history_swallows_exceptions_and_returns_false():
         result = erase_user_history("user-1")  # must not raise
 
     assert result is False
+
+
+def test_get_feedback_ratings_returns_composite_keyed_map():
+    """Phase 3.1 fix_feedback_hydration: rehydrating chat history needs to
+    recover exactly which (query_id, wine_id) pairs this user rated — not
+    just the latest rating per wine (get_latest_ratings' wine_id-only shape,
+    itself part of the cross-turn highlight leak — see PHASE3_HANDOFF.md
+    Backlog #17 — and now replaced by this function)."""
+    mock_table = MagicMock()
+    mock_table.select.return_value = mock_table
+    mock_table.eq.return_value = mock_table
+    mock_table.in_.return_value = mock_table
+    mock_table.execute.return_value.data = [
+        {"query_id": "q1", "wine_id": "w-1", "rating": "up"},
+        {"query_id": "q2", "wine_id": "w-1", "rating": "down"},
+    ]
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    with patch("src.logging_db._db", return_value=mock_db):
+        result = get_feedback_ratings("user-1", ["q1", "q2"])
+
+    assert result == {("q1", "w-1"): "up", ("q2", "w-1"): "down"}
+    mock_db.table.assert_called_once_with("recommendation_feedback")
+    mock_table.eq.assert_called_once_with("user_id", "user-1")
+    mock_table.in_.assert_called_once_with("query_id", ["q1", "q2"])
+
+
+def test_get_feedback_ratings_batches_large_query_id_lists():
+    from src import logging_db
+
+    mock_table = MagicMock()
+    mock_table.select.return_value = mock_table
+    mock_table.eq.return_value = mock_table
+    mock_table.in_.return_value = mock_table
+    mock_table.execute.return_value.data = []
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    many_ids = [f"q{i}" for i in range(250)]  # > _BATCH_SIZE (200)
+    with patch("src.logging_db._db", return_value=mock_db):
+        get_feedback_ratings("user-1", many_ids)
+
+    assert mock_table.in_.call_count == 2
+    first_batch = mock_table.in_.call_args_list[0].args[1]
+    second_batch = mock_table.in_.call_args_list[1].args[1]
+    assert len(first_batch) == logging_db._BATCH_SIZE
+    assert len(second_batch) == 50
+
+
+def test_get_feedback_ratings_returns_empty_for_no_query_ids():
+    with patch("src.logging_db._db") as mock_db_fn:
+        result = get_feedback_ratings("user-1", [])
+
+    assert result == {}
+    mock_db_fn.assert_not_called()  # empty input is a fast path, no DB round-trip
+
+
+def test_get_feedback_ratings_swallows_exceptions():
+    """A read failure must never raise past this function's boundary — a
+    missing highlight is cosmetic, never worth breaking the render over."""
+    mock_db = MagicMock()
+    mock_db.table.side_effect = RuntimeError("db down")
+
+    with patch("src.logging_db._db", return_value=mock_db):
+        result = get_feedback_ratings("user-1", ["q1"])  # must not raise
+
+    assert result == {}
 
 
 if __name__ == "__main__":

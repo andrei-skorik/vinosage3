@@ -41,7 +41,7 @@ def _seed_full_session():
         "avatar_uploader": object(),
         "_history_cache": [{"user_query": "old question"}],
         "wine_ratings": {"w-1": "up"},
-        "wine_ratings_loaded": True,
+        "_feedback_hydrated": True,
         "session_tokens_in": 500,
         "session_tokens_out": 900,
         "session_cost_micros": 1234,

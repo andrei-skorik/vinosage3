@@ -56,7 +56,7 @@ _KEYS_TO_CLEAR = (
     "_show_avatar_uploader", "_last_avatar_upload", "avatar_uploader",
     "_history_cache",           # "My conversations" (Defect B)
     # feedback-rating caches
-    "wine_ratings", "wine_ratings_loaded",
+    "wine_ratings", "_feedback_hydrated",
     # session metrics / token counters
     "session_tokens_in", "session_tokens_out", "session_cost_micros",
     "last_latency_ms",

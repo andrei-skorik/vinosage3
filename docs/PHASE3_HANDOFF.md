@@ -47,13 +47,13 @@
 
 ---
 
-## Phase 4 — final summary (steps 1–4c, + the post-4c highlight-leak fix)
+## Phase 4 — final summary (steps 1–4c, + two post-4c feedback-UI fixes)
 
 All six Phase 4 tasks are complete, committed, and human-smoke-tested. The
-follow-up feedback-highlight fix (last row below) is implemented and unit-
-tested but **not yet committed or human-smoke-verified** — see its own
-section for the pending checklist. Test count: **297 passed**, 22 deselected
-(integration/eval), up from 249 at the end of Phase 3.
+two follow-up feedback-UI fixes (last two rows below) are implemented,
+unit-tested, AND now human-smoke-verified (both checklists passed in full)
+— only the commit is still pending. Test count: **306 passed**, 22
+deselected (integration/eval), up from 249 at the end of Phase 3.
 
 | Step | What | Commit | Tests after |
 |------|------|--------|-------------|
@@ -63,7 +63,8 @@ section for the pending checklist. Test count: **297 passed**, 22 deselected
 | 4 | Login persistence via a browser-component cookie manager — **superseded**, its own human smoke test failed before any commit (cookie never written; see step 4b) | *(never committed standalone — folded into `d5e6d7b`)* | 279 (uncommitted) |
 | 4b | Redesign: native `st.context.cookies` read + staged one-shot `_emit_cookie_js` write, dependency removed | `d5e6d7b` (combined with step 4's surviving pieces — `refresh_session`, the UI call sites) | 283 |
 | 4c | Logout session hygiene (`reset_to_anonymous()`, incl. the `_auth_restore_done` self-defeat fix found during this step) + Forget-me history erasure (`erase_user_history`, anonymize-not-delete) | `3a36a3e` | 292 |
-| — | Fix feedback-highlight leak across turns: `_rating_key(query_id, wine_id)` scoping for the ratings-dict read/write AND the CSS marker (the marker-collision half wasn't named in the task brief) | *(pending — not yet committed)* | 297 |
+| — | Fix feedback-highlight leak across turns: `_rating_key(query_id, wine_id)` scoping for the ratings-dict read/write AND the CSS marker (the marker-collision half wasn't named in the task brief). Follows a human-authored duplicate-key fix (`639be50`, container key only). Human-smoke-verified ✅. | *(pending commit)* | 297 |
+| — | Hydrate feedback highlight from DB on history reload: new `get_feedback_ratings` (replaces the now-fully-dead `get_latest_ratings`, deleted) + `_hydrate_feedback_ratings`, both `(query_id, wine_id)`-keyed. Human-smoke-verified ✅. | *(pending commit)* | 306 |
 
 See each step's own section below for full detail; "Known accepted gaps" §3
 and the Backlog carry the cross-references.
@@ -657,16 +658,107 @@ changes otherwise.
 wider than the task's stated scope for the reason above, `logging_db.py`
 untouched.
 
-**Human smoke test — required by the task, not yet run (STOP for review,
-no commit made):**
-1. Profile: only Assyrtiko preferred, feedback table cleared, logged in.
-2. "Recommend me something for tonight" twice in a row (same wines both
+**Human smoke test — ✅ ALL PASSED, confirmed by the human:**
+1. ✅ Profile: only Assyrtiko preferred, feedback table cleared, logged in.
+2. ✅ "Recommend me something for tonight" twice in a row (same wines both
    turns).
-3. 👍 Lyrarakis in the FIRST card → the second turn's Lyrarakis card must
-   STAY unrated (grey).
-4. 👎 that same Lyrarakis in the SECOND card → first card stays 👍, second
-   shows 👎 — independent per-turn state, no desync, no crash (the
+3. ✅ 👍 Lyrarakis in the FIRST card → the second turn's Lyrarakis card
+   STAYED unrated (grey) — the leak is gone.
+4. ✅ 👎 that same Lyrarakis in the SECOND card → first card stayed 👍,
+   second showed 👎 — independent per-turn state, no desync, no crash (the
    `639be50` duplicate-key fix still holds).
+
+---
+
+## Phase 3.1 — hydrate feedback highlight from DB on history reload (`docs/phase3.1/fix_feedback_hydration/`)
+
+**Scope:** follow-up to the highlight-leak fix above. Bug confirmed live,
+logged-in: after Log out → Log in (profile intact, NOT forget-me), the
+rehydrated chat history showed every 👍/👎 button GREY, even though
+`recommendation_feedback` still held the user's ratings (verified in
+Supabase directly: Lyrarakis had live `up` and `down` rows). The DB was
+always correct — the UI simply never read it back on load.
+
+**Root cause (confirmed):** the feedback-highlight ACTIVE-state is read from
+a session-state `ratings` cache that is populated ONLY when the user clicks
+a button in the CURRENT session. On a fresh session — logout→login, and
+(per the fix's own reasoning, since a plain F5 starts a genuinely new
+Streamlit session too) a plain F5 — that cache starts empty, and nothing
+back-filled it from `recommendation_feedback`. A load-time gap that
+predates the `(query_id, wine_id)` leak fix, not a regression of it — that
+fix is correct within a session; this is the missing DB→UI hydration path.
+
+**Fix:**
+- New `src/logging_db.py::get_feedback_ratings(user_id, query_ids)` →
+  `{(query_id, wine_id): rating}` for the given turns, batched via `.in_()`
+  at `_BATCH_SIZE=200` (same convention as `src/ui/admin.py`). Swallows
+  exceptions, returns `{}` on failure (a missing highlight is cosmetic).
+  **Replaces** `get_latest_ratings` (Backlog #17's flagged-inert
+  `wine_id`-only bulk preload) outright — it had zero remaining callers
+  once this landed, so it was deleted rather than left as dead code.
+- New `src/ui/chat_view.py::_hydrate_feedback_ratings(user_id, ratings)` —
+  extracted from `render_feedback_buttons` for the same testability reason
+  as `_toggle_feedback`. Guarded by a NEW `_feedback_hydrated` session flag
+  (replacing the old `wine_ratings_loaded`), same pattern as `app.py`'s
+  `_chat_rehydrated`: runs once, collects every `query_id` across the
+  WHOLE session's `st.session_state.messages` (not just the turn currently
+  rendering, so one hydration covers an entire rehydrated conversation),
+  and merges the DB map into `ratings` via the existing `_rating_key`
+  composite key — the highlight-leak fix's keying is reused as-is, never
+  reverted to a `wine_id`-only lookup.
+- The cache stays the fast path for same-session clicks (`_toggle_feedback`
+  keeps it current, unchanged); the DB is the source of truth on load.
+
+**Necessary collateral fix (expands the diff beyond the task's stated
+"`chat_view.py`, `logging_db.py`, test file(s)"):** renaming the guard flag
+from `wine_ratings_loaded` to `_feedback_hydrated` required updating
+`src/ui/session_reset.py::_KEYS_TO_CLEAR` (and its test's seed data) to
+clear the NEW flag name instead of the old one. This is not optional
+tidiness — `reset_to_anonymous()` (called by both logout and forget-me)
+only pops an explicit key list, and `st.session_state` persists across a
+logout→login cycle within the same browser tab. Had the old flag name
+stayed in the clear list, `_feedback_hydrated` (the new name) would never
+have been cleared on logout, so after re-login the hydration block would
+see a stale "already done" flag left over from the pre-logout session and
+skip entirely — reproducing the EXACT bug this task fixes, for the EXACT
+repro scenario (logout→login) the task's own human smoke test names first.
+(A plain F5 doesn't need this: it starts a genuinely new Streamlit session
+with no `_feedback_hydrated` key at all.)
+
+**Scope guard honored:** only logged-in users hydrate (unchanged — the
+existing `if not user_id: return` gate). Write path, container key,
+profile-fold logic, and `(query_id, wine_id)` keying untouched.
+`resolve_thread_id`/checkpointer/graph untouched — this is pure UI state.
+
+**Tests:** `tests/test_logging_db.py` (+4) — `get_feedback_ratings` returns
+the composite-keyed map; batches correctly for >200 query_ids; empty input
+is a fast path with zero DB calls; a DB failure returns `{}` without
+raising. New `tests/test_feedback_hydration.py` (5) — the three scenarios
+the task required (back-fill populates the right pairs; runs once, a
+second call is a no-op even with the flag already set; same-wine-different-
+turn independence still holds after hydration — the regression guard for
+the leak fixed just before this) plus one test asserting every `query_id`
+in history reaches the DB call. `render_feedback_buttons` itself remains
+untested directly (Streamlit-bound, highlight invisible to mocks, per the
+task's own scoping) — these pin the extracted pure state layer.
+
+**Verified:** full suite green, **306 passed** (was 297, +9 exactly — 4 in
+`test_logging_db.py`, 5 in `test_feedback_hydration.py`). `git diff --stat`:
+`src/logging_db.py`, `src/ui/chat_view.py`, `tests/test_logging_db.py`,
+`tests/test_feedback_hydration.py` (new) — as the task specified — plus
+`src/ui/session_reset.py` and `tests/test_session_reset.py` for the
+necessary flag-rename collateral above. No checkpointer/graph/write-path
+changes.
+
+**Human smoke test — ✅ ALL PASSED, confirmed by the human.** Logged in,
+Lyrarakis already had 👍 in turn 1 and 👎 in turn 2 (rows still in the DB
+from the prior test).
+1. ✅ Log out → Log in → the rehydrated history showed Lyrarakis turn-1 card
+   GREEN 👍 and turn-2 card RED 👎, exactly as before logout (previously
+   both grey — the bug is fixed).
+2. ✅ Plain F5 (no logout) → same: highlights restored from DB, not lost.
+3. ✅ Other wines with no rating stayed grey. No crash, no leak between
+   turns.
 
 ---
 
@@ -1319,21 +1411,15 @@ None of these are blocking; revisit only on concrete product/ops need.
     revoke the server-side session, not just drop the client's access to
     it. Not fixed here; revisit alongside any future session-management
     hardening.
-17. **`get_latest_ratings` bulk preload is `wine_id`-only** (found during the
-    feedback-highlight-leak fix — see "Phase 3.1 — fix feedback-highlight
-    leak across turns" above). `src/logging_db.py::get_latest_ratings`
-    returns `{wine_id: rating}`, used to pre-populate
-    `st.session_state['wine_ratings']` on session start so previously-rated
-    wines show the correct button colour without a re-click. After the
-    highlight-leak fix, `ratings` is keyed by `_rating_key(query_id,
-    wine_id)` everywhere else — the bulk-preloaded `wine_id`-only keys no
-    longer match anything, so the preload is now silently inert (not wrong,
-    just a no-op). Fix: have `get_latest_ratings` select `query_id` too and
-    return `{f"{query_id}:{wine_id}": rating}` — one row per
-    `(user_id, query_id, wine_id)` already (the table's unique constraint),
-    so no "latest wins" dedup logic would even be needed anymore, simpler
-    than today's version. Not fixed in that step — touching `logging_db.py`
-    was outside its stated diff scope (`chat_view.py` + test file only).
+17. ~~`get_latest_ratings` bulk preload is `wine_id`-only~~ **RESOLVED
+    (Phase 3.1 — "hydrate feedback highlight from DB on history reload").**
+    `get_latest_ratings` deleted outright (zero remaining callers) and
+    replaced by `get_feedback_ratings(user_id, query_ids)` →
+    `{(query_id, wine_id): rating}`, wired into a new
+    `_hydrate_feedback_ratings` in `chat_view.py`. See that section above
+    for full detail — this turned out to be the SAME load-time hydration
+    gap as the live "logout→login shows every card grey" bug, not a
+    separate cosmetic nice-to-have as originally framed here.
 
 ---
 
