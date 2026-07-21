@@ -64,7 +64,7 @@ def test_anonymous_never_calls_log_feedback_or_fold_feedback(monkeypatch):
     )
     # The button state still updates locally (session-only) — only the DB
     # writes are gated.
-    assert ratings["w-1"] == "up"
+    assert ratings[chat_view._rating_key("q1", "w-1")] == "up"
 
 
 def test_anonymous_toggle_off_never_calls_delete_or_fold(monkeypatch):
@@ -76,12 +76,12 @@ def test_anonymous_toggle_off_never_calls_delete_or_fold(monkeypatch):
         "src.logging_db.delete_feedback",
         lambda **k: pytest.fail("delete_feedback must never be called for an anonymous user"),
     )
-    ratings = {"w-1": "down"}  # already rated -> this call toggles it off
+    ratings = {chat_view._rating_key("q1", "w-1"): "down"}  # already rated -> this call toggles it off
     chat_view._toggle_feedback(
         _make_wine(), "down",
         ratings=ratings, user_id=None, session_id="s1", query_id="q1", locale="en",
     )
-    assert ratings["w-1"] is None
+    assert ratings[chat_view._rating_key("q1", "w-1")] is None
 
 
 # ── Positive control: logged-in users DO persist through both paths ─────────
@@ -117,7 +117,7 @@ def test_authenticated_user_calls_log_feedback_and_fold_feedback(monkeypatch):
     assert calls["log"]["wine_id"] == "w-1"
     assert calls["log"]["reason"] == '{"added_preferred_types": ["Red"]}'
     assert calls["fold"] == ("user-42", wine, "up", None)
-    assert ratings["w-1"] == "up"
+    assert ratings[chat_view._rating_key("q1", "w-1")] == "up"
 
 
 def test_authenticated_toggle_off_calls_delete_and_fold_none(monkeypatch):
@@ -138,13 +138,13 @@ def test_authenticated_toggle_off_calls_delete_and_fold_none(monkeypatch):
     monkeypatch.setattr("src.preferences.fold_feedback", _fold)
 
     wine = _make_wine()
-    ratings = {"w-1": "up"}
+    ratings = {chat_view._rating_key("q1", "w-1"): "up"}
     chat_view._toggle_feedback(
         wine, "up",
         ratings=ratings, user_id="user-42", session_id="s1", query_id="q1", locale="en",
     )
 
-    assert ratings["w-1"] is None
+    assert ratings[chat_view._rating_key("q1", "w-1")] is None
     assert calls["delete"] == {"user_id": "user-42", "wine_id": "w-1"}
     assert calls["fold"] == ("user-42", wine, "none", recorded_delta)
 

@@ -260,6 +260,20 @@ def _fold_profile_dict(
     return p
 
 
+def _rating_key(query_id: str | None, wine_id: str) -> str:
+    """Composite identity a card's feedback state is scoped by.
+
+    The write path (log_feedback/delete_feedback/get_feedback_reason) and
+    the container/button widget keys were already scoped by (query_id,
+    wine_id) — this is the SAME scoping applied to the in-memory `ratings`
+    cache and the CSS marker that drives the highlight JS, both of which
+    used to key on wine_id alone. Without it, rating a wine in one turn
+    visually "leaked" its colour onto every other turn's card for that same
+    wine (the recommend_for_me repeat-recommendation scenario in particular).
+    """
+    return f"{query_id}:{wine_id}"
+
+
 def _toggle_feedback(
     wine: dict[str, Any],
     direction: str,
@@ -296,13 +310,14 @@ def _toggle_feedback(
     from src.preferences import fold_feedback
 
     wine_id = str(wine.get("wine_id", ""))
-    previous = ratings.get(wine_id)
+    key = _rating_key(query_id, wine_id)
+    previous = ratings.get(key)
 
     if previous == direction:
         # Toggle off: revert exactly what the active fold recorded, then
         # delete the row (delete_feedback removes ALL rows for this wine,
         # matching its existing no-query_id-scoped behavior).
-        ratings[wine_id] = None
+        ratings[key] = None
         if user_id:
             reason = get_feedback_reason(user_id=user_id, query_id=query_id, wine_id=wine_id)
             fold_feedback(user_id, wine, "none", delta=reason)
@@ -322,7 +337,7 @@ def _toggle_feedback(
             if fold_cache:
                 fold_cache(wine, "none", delta=prior_reason)
 
-    ratings[wine_id] = direction
+    ratings[key] = direction
     if not user_id:
         return
 
@@ -356,8 +371,9 @@ def render_feedback_buttons(
     A failed DB write is silent — only success triggers st.toast (SPEC §5.4).
 
     Colouring mechanism: each button label embeds a zero-width space (U+200B)
-    followed by a unique marker string (wine_id + direction suffix) that is
-    completely invisible to the user.  A single components.v1.html() call
+    followed by a unique marker string (_rating_key(query_id, wine_id) +
+    direction suffix — NOT wine_id alone, see the fix note by `mines` below)
+    that is completely invisible to the user.  A single components.v1.html() call
     injects JS that scans all <button> elements in the parent document for this
     hidden marker, then either sets the active colour or removes any previously
     set inline styles (= toggle-off reset).  This avoids the layout-shift
@@ -434,13 +450,21 @@ def render_feedback_buttons(
     # color_map: active marker → CSS colour (absent = reset to default).
     # mines:     ALL markers for THIS message's wines — scopes the JS so it
     #            never touches buttons belonging to a different message.
+    #            The marker itself must be (query_id, wine_id)-derived, not
+    #            wine_id alone: the injected JS matches markers by class name
+    #            across the WHOLE parent document (querySelectorAll has no
+    #            per-message scoping), so a wine_id-only marker is identical
+    #            across every turn that recommends the same wine — one
+    #            turn's script would then recolour (or reset) a sibling
+    #            turn's card for that wine, same leak as the ratings-dict one.
     color_map: dict[str, str] = {}
     mines: dict[str, bool] = {}
 
     for w in wines:
         wine_id = str(w.get("wine_id", ""))
-        current = ratings.get(wine_id)
-        safe = wine_id.replace("-", "")      # 32 hex chars; valid CSS class
+        key = _rating_key(query_id, wine_id)
+        current = ratings.get(key)
+        safe = key.replace("-", "").replace(":", "")   # valid CSS class (alnum only)
         mk_u, mk_d = "fbm" + safe + "u", "fbm" + safe + "d"
         mines[mk_u] = True
         mines[mk_d] = True

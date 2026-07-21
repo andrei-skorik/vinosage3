@@ -47,11 +47,13 @@
 
 ---
 
-## Phase 4 — final summary (steps 1–4c)
+## Phase 4 — final summary (steps 1–4c, + the post-4c highlight-leak fix)
 
-All six Phase 4 tasks are complete, committed, and human-smoke-tested. Final
-test count: **292 passed**, 22 deselected (integration/eval), up from 249 at
-the end of Phase 3.
+All six Phase 4 tasks are complete, committed, and human-smoke-tested. The
+follow-up feedback-highlight fix (last row below) is implemented and unit-
+tested but **not yet committed or human-smoke-verified** — see its own
+section for the pending checklist. Test count: **297 passed**, 22 deselected
+(integration/eval), up from 249 at the end of Phase 3.
 
 | Step | What | Commit | Tests after |
 |------|------|--------|-------------|
@@ -61,6 +63,7 @@ the end of Phase 3.
 | 4 | Login persistence via a browser-component cookie manager — **superseded**, its own human smoke test failed before any commit (cookie never written; see step 4b) | *(never committed standalone — folded into `d5e6d7b`)* | 279 (uncommitted) |
 | 4b | Redesign: native `st.context.cookies` read + staged one-shot `_emit_cookie_js` write, dependency removed | `d5e6d7b` (combined with step 4's surviving pieces — `refresh_session`, the UI call sites) | 283 |
 | 4c | Logout session hygiene (`reset_to_anonymous()`, incl. the `_auth_restore_done` self-defeat fix found during this step) + Forget-me history erasure (`erase_user_history`, anonymize-not-delete) | `3a36a3e` | 292 |
+| — | Fix feedback-highlight leak across turns: `_rating_key(query_id, wine_id)` scoping for the ratings-dict read/write AND the CSS marker (the marker-collision half wasn't named in the task brief) | *(pending — not yet committed)* | 297 |
 
 See each step's own section below for full detail; "Known accepted gaps" §3
 and the Backlog carry the cross-references.
@@ -565,6 +568,105 @@ plus new `src/ui/session_reset.py` and `tests/test_session_reset.py` —
    `user_query = '[erased]'`; today's cost total in the admin analytics was
    unchanged by the erasure (the anonymize-not-delete design holding as
    intended).
+
+---
+
+## Phase 3.1 — fix feedback-highlight leak across turns (`docs/phase3.1/fix_feedback_highlight_leak/`)
+
+**Scope:** follow-up to a human-authored duplicate-key fix (commit `639be50`,
+"👍/👎 buttons bug fix" — scoped the wine-card `st.container` key by
+`(query_id, wine_id)`, previously `wine_id` alone). That fix corrected the
+container key and confirmed the DB write path was already
+`(query_id, wine_id)`-scoped, but the button's ACTIVE-STATE (green/red
+highlight) READ was still keyed by `wine_id` alone — confirmed live,
+logged-in: 👍 on a wine in one turn also lit up the SAME wine's card in a
+later turn (different `query_id`), a visual lie and a state/data desync risk
+if the second card was then clicked.
+
+**Root cause — two independent layers, only one of which the task's own
+diagnosis named:**
+1. **Python layer** (as diagnosed): `render_feedback_buttons`'s active-state
+   read (`ratings.get(wine_id)`) and `_toggle_feedback`'s "already rated?"
+   read/write into the same `ratings` dict were keyed by `wine_id` alone,
+   even though the DB write (`log_feedback`/`delete_feedback`/
+   `get_feedback_reason`) and the button/container widget keys were already
+   correctly `(query_id, wine_id)`-scoped.
+2. **JS/DOM layer (found during this step, not named in the task brief) —
+   arguably the more load-bearing bug.** The CSS marker class name that
+   drives the highlight JS (`safe = wine_id.replace("-", "")`, `mk_u = "fbm"
+   + safe + "u"`) was ALSO wine_id-only. The injected script matches markers
+   via `document.querySelectorAll('span[class^="fbm"]')` against the WHOLE
+   parent document — no per-message DOM scoping exists despite the code
+   comment's claim ("scopes the JS so it never touches buttons belonging to
+   a different message"). Two turns recommending the same wine therefore
+   render an IDENTICAL marker class in the DOM; either turn's script would
+   then recolour or reset the OTHER turn's button. Fixing only the Python
+   `ratings` dict without this would have left the reported symptom
+   unchanged — the visible bug lives at least as much in the marker
+   collision as in the dict key.
+
+**Fix (`src/ui/chat_view.py` only):** new private `_rating_key(query_id,
+wine_id) -> str` (`f"{query_id}:{wine_id}"`) — the single source of truth
+for a card's composite identity. Applied to: `_toggle_feedback`'s
+read/write of `ratings` (toggle-off check, flip check, both writes); and
+`render_feedback_buttons`'s active-state read AND the CSS marker string
+(`safe = key.replace("-", "").replace(":", "")`, CSS-class-safe). The DB
+write scoping and the container/button widget keys were left untouched, as
+instructed — they were already correct.
+
+**Grepped for other `wine_id`-only scoping, as instructed. Found one more,
+deliberately NOT fixed here:** `src/logging_db.py::get_latest_ratings(user_id)`
+— the one-time bulk preload that seeds `st.session_state['wine_ratings']` on
+session start (`{wine_id: rating}`, no `query_id`) — also governs per-card
+state and is technically the same class of bug (it "worked" pre-fix only
+because it was part of the same leak). **Not fixed**: doing so would require
+touching `logging_db.py`, outside this task's explicit verification
+constraint (`git diff --stat` — only `chat_view.py` + the test file).
+Consequence: after this fix, the bulk preload's `wine_id`-only keys never
+match the new `(query_id, wine_id)` lookups, so it silently becomes inert —
+previously-rated wines from past turns no longer show pre-coloured on
+session start/after F5; they simply read as unrated until re-clicked in the
+current session. Not a correctness regression (no wrong colour is shown),
+but a quiet loss of a nicety. Flagged in the Backlog below as a natural
+small follow-up (`get_latest_ratings` would need to select `query_id` too
+and return `{f"{query_id}:{wine_id}": rating}`).
+
+**Tests:** new `tests/test_feedback_highlight_scoping.py` (5 tests) — the
+three scenarios the task required (rating one turn leaves a sibling turn's
+same wine unrated; toggling one turn's rating doesn't alter a sibling
+turn's; the composite key round-trips the correct turn's rating), plus two
+direct unit tests of `_rating_key` itself. `render_feedback_buttons` itself
+is Streamlit-bound and not exercised directly, per the task's own scoping —
+these tests pin the pure state layer via `_toggle_feedback`, which already
+took `query_id` as a parameter for its (already-correct) DB calls.
+
+**Necessary collateral fix (expands the diff beyond the task's stated
+"`chat_view.py` + the test file"):** two PRE-EXISTING test files hardcoded
+the old, buggy flat `ratings["w-1"]` key format in their assertions —
+`tests/test_feedback_anonymous.py` (4 assertions) and
+`tests/test_fold_provenance.py` (2 assertions/seeds). Fixing the real bug
+without updating these would have broken them outright (they were pinning
+the pre-fix key shape, not any behavior worth preserving); updated both to
+`ratings[chat_view._rating_key(query_id, "w-1")]`, zero behavior-assertion
+changes otherwise.
+
+**Verified:** full suite green, **297 passed** (was 292, +5 exactly).
+`git diff --stat`: `src/ui/chat_view.py`, `tests/test_feedback_highlight_scoping.py`
+(new), plus the two necessary collateral test fixes
+(`tests/test_feedback_anonymous.py`, `tests/test_fold_provenance.py`) —
+wider than the task's stated scope for the reason above, `logging_db.py`
+untouched.
+
+**Human smoke test — required by the task, not yet run (STOP for review,
+no commit made):**
+1. Profile: only Assyrtiko preferred, feedback table cleared, logged in.
+2. "Recommend me something for tonight" twice in a row (same wines both
+   turns).
+3. 👍 Lyrarakis in the FIRST card → the second turn's Lyrarakis card must
+   STAY unrated (grey).
+4. 👎 that same Lyrarakis in the SECOND card → first card stays 👍, second
+   shows 👎 — independent per-turn state, no desync, no crash (the
+   `639be50` duplicate-key fix still holds).
 
 ---
 
@@ -1217,6 +1319,21 @@ None of these are blocking; revisit only on concrete product/ops need.
     revoke the server-side session, not just drop the client's access to
     it. Not fixed here; revisit alongside any future session-management
     hardening.
+17. **`get_latest_ratings` bulk preload is `wine_id`-only** (found during the
+    feedback-highlight-leak fix — see "Phase 3.1 — fix feedback-highlight
+    leak across turns" above). `src/logging_db.py::get_latest_ratings`
+    returns `{wine_id: rating}`, used to pre-populate
+    `st.session_state['wine_ratings']` on session start so previously-rated
+    wines show the correct button colour without a re-click. After the
+    highlight-leak fix, `ratings` is keyed by `_rating_key(query_id,
+    wine_id)` everywhere else — the bulk-preloaded `wine_id`-only keys no
+    longer match anything, so the preload is now silently inert (not wrong,
+    just a no-op). Fix: have `get_latest_ratings` select `query_id` too and
+    return `{f"{query_id}:{wine_id}": rating}` — one row per
+    `(user_id, query_id, wine_id)` already (the table's unique constraint),
+    so no "latest wins" dedup logic would even be needed anymore, simpler
+    than today's version. Not fixed in that step — touching `logging_db.py`
+    was outside its stated diff scope (`chat_view.py` + test file only).
 
 ---
 

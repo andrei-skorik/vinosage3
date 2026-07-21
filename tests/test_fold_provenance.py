@@ -242,11 +242,11 @@ def test_flip_down_to_up_reverts_down_delta_and_applies_up(monkeypatch):
     _toggle(wine, "down", ratings, profile_db=profile_db, feedback_db=feedback_db, monkeypatch=monkeypatch)
     assert _lists(profile_db.profile)["disliked_grapes"] == ["Malbec"]
     assert _lists(profile_db.profile)["disliked_styles"] == ["Rich & Juicy"]
-    assert ratings["w-1"] == "down"
+    assert ratings[chat_view._rating_key("q1", "w-1")] == "down"
 
     _toggle(wine, "up", ratings, profile_db=profile_db, feedback_db=feedback_db, monkeypatch=monkeypatch)
 
-    assert ratings["w-1"] == "up"
+    assert ratings[chat_view._rating_key("q1", "w-1")] == "up"
     final = _lists(profile_db.profile)
     assert final["disliked_grapes"] == []
     assert final["disliked_styles"] == []
@@ -278,7 +278,7 @@ def test_legacy_row_with_null_reason_reverts_nothing(monkeypatch):
         "wine_title": "Old Wine", "rating": "down", "reason": None,
     }
     wine = {"wine_id": "w-1", "type": "Red", "grape": "Malbec", "style": "Rich & Juicy"}
-    ratings = {"w-1": "down"}
+    ratings = {chat_view._rating_key("q1", "w-1"): "down"}
 
     _toggle(wine, "down", ratings, profile_db=profile_db, feedback_db=feedback_db, monkeypatch=monkeypatch)
 
