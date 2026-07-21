@@ -239,6 +239,7 @@ def render_history_view(locale: str) -> None:
     auth = st.session_state.get("auth")
     if not auth:
         return
+    user_avatar = auth.get("avatar_url") or "👤"
 
     with st.expander(f"📜 {t('history_header', locale)}"):
         # Fetched only on explicit click, never automatically on login/rerun —
@@ -269,5 +270,7 @@ def render_history_view(locale: str) -> None:
                 answer = answer[:_HISTORY_ANSWER_PREVIEW].rstrip() + "…"
             with st.container(border=True):
                 st.caption(ts)
-                st.markdown(f"🧑 {row.get('user_query', '')}")
-                st.markdown(f"🤖 {answer}")
+                with st.chat_message("user", avatar=user_avatar):
+                    st.markdown(row.get("user_query", ""))
+                with st.chat_message("assistant", avatar="🍷"):
+                    st.markdown(answer)

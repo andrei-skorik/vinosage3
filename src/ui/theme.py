@@ -302,7 +302,16 @@ div[data-testid="stElementContainer"]:has(span[class^="fbm"]) {
 .stTextInput input, .stNumberInput input, .stSelectbox > div, .stMultiSelect > div {
   border-radius: var(--radius) !important;
 }
-.stTextInput input:focus, .stNumberInput input:focus {
+/* :focus-within on the outer wrapper, NOT :focus on the bare <input> —
+   Streamlit/baseweb draws the visible rounded border on the wrapper
+   ([data-testid="stTextInputRootElement"]); the raw <input> inside has no
+   border of its own. Styling border-color/box-shadow directly on the input
+   (an earlier version of this rule) painted a SECOND, tightly-hugging
+   rounded rectangle nested inside the existing box on focus — most visible
+   on password fields (login, admin) — rather than highlighting the box that
+   was already there. */
+[data-testid="stTextInputRootElement"]:focus-within,
+[data-testid="stNumberInputContainer"]:focus-within {
   border-color: var(--wine) !important; box-shadow: 0 0 0 1px var(--wine) !important;
 }
 [data-testid="stButton"] button:focus-visible,
