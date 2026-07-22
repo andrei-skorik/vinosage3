@@ -324,10 +324,12 @@ Copy `.env.example` to `.env` and fill in every value.
 
 ## Database Setup
 
-Applies the numbered SQL files (`sql/01`–`10`, in order) to your Supabase
-project via the Management API. Ordering matters twice: `sql/09` must be
-live before the v2.0 tools log anything, and `sql/10` before voice costs
-are recorded.
+Applies the numbered SQL files (`sql/01`–`11`, in order) to your Supabase
+project via the Management API. Ordering matters three times: `sql/09` must
+be live before the v2.0 tools log anything, `sql/10` before voice costs are
+recorded, and `sql/11` after `scripts/setup_checkpointer.py` has created the
+checkpointer tables at least once (it only adds RLS policies to tables that
+must already exist).
 Requires `SUPABASE_ACCESS_TOKEN` (create at https://supabase.com/dashboard/account/tokens)
 and `SUPABASE_PROJECT_REF` (the `<ref>` in `https://<ref>.supabase.co`) — set both in `.env`.
 
@@ -342,6 +344,10 @@ What it creates:
 - `match_wines()` RPC for semantic search
 - `flag_wine_embedding()` trigger (re-embeds on content change)
 - `bulk_update_embeddings()` helper function
+- `sql/11`: RLS + service-role-only policies on the LangGraph checkpointer
+  tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`,
+  `checkpoint_migrations`) — closes a Supabase Security Advisor finding;
+  see that file's header comment for the full rationale
 
 ---
 

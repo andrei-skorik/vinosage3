@@ -762,6 +762,51 @@ from the prior test).
 
 ---
 
+## Security hardening — checkpointer tables had RLS disabled (`sql/11_checkpointer_rls.sql`)
+
+**Found:** Supabase's Security Advisor flagged 4 errors — "RLS Disabled in
+Public" on `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`,
+`checkpoint_migrations`, all marked UNRESTRICTED. These are the LangGraph
+checkpointer's own tables (created by `PostgresSaver.setup()` via
+`scripts/setup_checkpointer.py` — intentionally NOT part of this project's
+`sql/01`–`10` schema, since the library owns and versions them itself; see
+that script's docstring).
+
+**Why this was a real exposure, not cosmetic:** with RLS disabled on
+public-schema tables, Supabase's auto-generated PostgREST API exposes them,
+unrestricted, to anyone holding the `anon` key — and these tables hold every
+logged-in user's full serialized conversation state (SPEC step 9). Not
+flagging/fixing this would have quietly undermined all the privacy work
+elsewhere in this document (forget-me, anonymize-not-delete, etc.).
+
+**Why the fix is safe:** the app's own access to these tables is via
+`DATABASE_URL` (a direct `psycopg` connection, `src/checkpointer.py`), which
+authenticates as a role that bypasses RLS by default on Supabase (the
+`postgres`/pooler role). Enabling RLS only closes the PostgREST/anon-key
+surface — it has no effect on the checkpointer's own functionality.
+
+**Fix:** new `sql/11_checkpointer_rls.sql` (generated only, per the
+"never run SQL against Supabase automatically" rule — the human applies it)
+— `enable row level security` + a `service_role`-only policy on each of the
+4 tables, mirroring the exact pattern already used for `security_events`
+(`sql/07`) and every other sensitive table. Picked up automatically by the
+existing `python scripts/apply_sql.py` (globs all `sql/*.sql`), no script
+changes needed. `README.md`'s Database Setup section updated (`sql/01`–`11`
+now, with the ordering note: `sql/11` must be applied AFTER
+`scripts/setup_checkpointer.py` has created these tables at least once).
+
+**⚠️ Deploy reminder: apply `sql/11_checkpointer_rls.sql` via the Supabase
+SQL Editor (or `scripts/apply_sql.py`) — after `setup_checkpointer.py` has
+run at least once.** Until applied, the exposure described above remains
+open on any project where the checkpointer tables exist.
+
+**Not yet applied by the human as of this writing** — no DB-side
+verification possible from here (`Do NOT run SQL against Supabase`, per
+CLAUDE.md). Recommend the human re-run Supabase's Security Advisor after
+applying to confirm all 4 findings clear.
+
+---
+
 ## Step 4 — voice input via Whisper (`docs/phase3/step4_voice/`)
 
 **Status:** Done, pending human smoke test with a real mic + real API call.
