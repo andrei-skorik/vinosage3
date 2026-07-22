@@ -47,12 +47,12 @@
 
 ---
 
-## Phase 4 — final summary (steps 1–4c, + two post-4c feedback-UI fixes)
+## Phase 4 — final summary (steps 1–4c, + post-4c fixes)
 
 All six Phase 4 tasks are complete, committed, and human-smoke-tested. The
-two follow-up feedback-UI fixes (last two rows below) are implemented,
-unit-tested, AND now human-smoke-verified (both checklists passed in full)
-— only the commit is still pending. Test count: **306 passed**, 22
+follow-up fixes below are complete and human-smoke-verified too, except the
+last row (model-override fix), which is implemented + unit-tested and
+awaiting its human smoke test + commit. Test count: **308 passed**, 22
 deselected (integration/eval), up from 249 at the end of Phase 3.
 
 | Step | What | Commit | Tests after |
@@ -63,8 +63,10 @@ deselected (integration/eval), up from 249 at the end of Phase 3.
 | 4 | Login persistence via a browser-component cookie manager — **superseded**, its own human smoke test failed before any commit (cookie never written; see step 4b) | *(never committed standalone — folded into `d5e6d7b`)* | 279 (uncommitted) |
 | 4b | Redesign: native `st.context.cookies` read + staged one-shot `_emit_cookie_js` write, dependency removed | `d5e6d7b` (combined with step 4's surviving pieces — `refresh_session`, the UI call sites) | 283 |
 | 4c | Logout session hygiene (`reset_to_anonymous()`, incl. the `_auth_restore_done` self-defeat fix found during this step) + Forget-me history erasure (`erase_user_history`, anonymize-not-delete) | `3a36a3e` | 292 |
-| — | Fix feedback-highlight leak across turns: `_rating_key(query_id, wine_id)` scoping for the ratings-dict read/write AND the CSS marker (the marker-collision half wasn't named in the task brief). Follows a human-authored duplicate-key fix (`639be50`, container key only). Human-smoke-verified ✅. | *(pending commit)* | 297 |
-| — | Hydrate feedback highlight from DB on history reload: new `get_feedback_ratings` (replaces the now-fully-dead `get_latest_ratings`, deleted) + `_hydrate_feedback_ratings`, both `(query_id, wine_id)`-keyed. Human-smoke-verified ✅. | *(pending commit)* | 306 |
+| — | Fix feedback-highlight leak across turns: `_rating_key(query_id, wine_id)` scoping for the ratings-dict read/write AND the CSS marker (the marker-collision half wasn't named in the task brief). Follows a human-authored duplicate-key fix (`639be50`, container key only). | `46eb947` | 297 |
+| — | Hydrate feedback highlight from DB on history reload: new `get_feedback_ratings` (replaces the now-fully-dead `get_latest_ratings`, deleted), both `(query_id, wine_id)`-keyed | `095d6af` | 306 |
+| — | Security hardening: enable RLS on the LangGraph checkpointer tables (`sql/11_checkpointer_rls.sql`) — closed a Supabase Security Advisor finding | `065d5b9` | 306 (no code test delta — SQL-only) |
+| — | Fix: dev-panel model override was silently overriding Quick/In-Depth (`_resolve_model_override` sentinel, `src/ui/admin.py`) — found via a user-reported by-model discrepancy in the feedback insights panel | *(pending commit + human smoke test)* | 308 |
 
 See each step's own section below for full detail; "Known accepted gaps" §3
 and the Backlog carry the cross-references.
@@ -800,10 +802,62 @@ SQL Editor (or `scripts/apply_sql.py`) — after `setup_checkpointer.py` has
 run at least once.** Until applied, the exposure described above remains
 open on any project where the checkpointer tables exist.
 
-**Not yet applied by the human as of this writing** — no DB-side
-verification possible from here (`Do NOT run SQL against Supabase`, per
-CLAUDE.md). Recommend the human re-run Supabase's Security Advisor after
-applying to confirm all 4 findings clear.
+**✅ Applied and confirmed by the human** — Supabase's Security Advisor
+re-run shows all 4 "RLS Disabled in Public" findings cleared.
+
+---
+
+## Fix: dev-panel model override was silently overriding Quick/In-Depth
+
+**Found** while investigating a user-reported discrepancy: the admin
+"Recommendation feedback" panel's by-model breakdown showed every rating
+under `anthropic/claude-haiku-4.5`, even for a turn the human distinctly
+remembered rating while **In-Depth** mode was selected (which should have
+used `openai/gpt-5.2`).
+
+**Root cause:** `app.py`'s model resolution is
+`model = st.session_state.dev_model_override or (QUICK_MODEL if
+answer_mode=="quick" else INDEPTH_MODEL)`. Before this fix,
+`_render_dev_settings()` (`src/ui/admin.py`) built the model selectbox as
+`current = st.session_state.get("dev_model_override") or DEFAULT_MODEL` and
+assigned its return value straight back to `dev_model_override`. `st.
+selectbox` always returns a concrete option — never `None` — so **merely
+unlocking the dev panel once** (without touching the dropdown) permanently
+set `dev_model_override` to `DEFAULT_MODEL` (`anthropic/claude-haiku-4.5`).
+From that point on, every subsequent turn in that browser session used
+haiku regardless of the Quick/In-Depth toggle — silently, with no
+indication in the sidebar that the toggle had stopped doing anything. Given
+how many times the dev panel was opened during this session's smoke testing
+(sweep button, dev settings inspection, etc.), this fully explains the
+reported observation.
+
+**Fix (`src/ui/admin.py` only):** new sentinel `_NO_MODEL_OVERRIDE =
+"— auto (Quick/In-Depth) —"` prepended to the selectbox's option list, and a
+new pure `_resolve_model_override(selected) -> str | None` mapping it back
+to `None` (anything else passes through unchanged). The selectbox now
+defaults to (and can be explicitly reset to) the sentinel, which resolves to
+`None` — restoring the original "opening the panel changes nothing until an
+admin explicitly moves a control" guarantee the module's own docstring had
+already (incorrectly) claimed. Only `dev_model_override` needed this
+treatment — `dev_temperature`'s and `dev_tools_enabled`'s widget *defaults*
+(0.2, all tools enabled) already match the end-user path, so rendering
+those two is harmless (see the refined Backlog #15 note above); the dead
+`DEFAULT_MODEL` import was removed from `admin.py` accordingly.
+
+**Tests:** new `tests/test_admin.py` (2 tests) — the pure
+`_resolve_model_override` helper: sentinel → `None`; a real model string
+passes through unchanged.
+
+**Verified:** full suite green, **308 passed** (was 306, +2 exactly).
+`git diff --stat`: `src/ui/admin.py`, `tests/test_admin.py` (new) — no other
+files touched.
+
+**Human-only checklist (not yet done — pass to the human):** unlock the
+dev panel, confirm the model dropdown shows "— auto (Quick/In-Depth) —" by
+default (not a real model name); toggle Quick ↔ In-Depth in the sidebar and
+confirm the admin feedback panel's by-model breakdown now correctly
+attributes new ratings to the actual model in use; explicitly pick a real
+model in the dropdown and confirm it DOES override, exactly as before.
 
 ---
 
@@ -1436,15 +1490,23 @@ None of these are blocking; revisit only on concrete product/ops need.
 15. **Dev/admin panel state survives logout on a shared machine** (found
     during Phase 4 step 4c while enumerating what `reset_to_anonymous()`
     should clear — see that section's "Not in scope" note). `admin_unlocked`,
-    `dev_model_override`, `dev_temperature`, `dev_tools_enabled` are untouched
-    by logout/forget-me. Worst case: an admin overrides `dev_temperature`
-    away from 0.2, logs out without re-locking the panel, and the NEXT
-    anonymous user's chat runs at that overridden temperature — `app.py`
-    applies `dev_temperature` regardless of `admin_unlocked` — a latent,
-    adjacent violation of "temperature stays 0.2 for all end-user paths" on
-    a shared device. Not fixed in step 4c (out of that task's explicit
-    scope); revisit if shared-machine/kiosk-style deployment becomes a real
-    use case.
+    `dev_temperature`, `dev_tools_enabled` are untouched by logout/forget-me.
+    Worst case: an admin overrides `dev_temperature` away from 0.2, logs out
+    without re-locking the panel, and the NEXT anonymous user's chat runs at
+    that overridden temperature — `app.py` applies `dev_temperature`
+    regardless of `admin_unlocked` — a latent, adjacent violation of
+    "temperature stays 0.2 for all end-user paths" on a shared device. Note:
+    `dev_temperature`'s and `dev_tools_enabled`'s widget *defaults* (0.2, all
+    tools enabled) already match the end-user path, so merely rendering
+    these two controls is harmless — the risk only materialises if an admin
+    *explicitly* moves them away from default and then leaves the panel
+    unlocked. `dev_model_override` did NOT have this property (its widget
+    default, `DEFAULT_MODEL`, differs from what Quick/In-Depth would pick)
+    and has since been **fixed** — see "Fix: dev-panel model override was
+    silently overriding Quick/In-Depth" below. `dev_temperature`/
+    `dev_tools_enabled` remain not fixed (out of scope, lower severity per
+    the above); revisit if shared-machine/kiosk-style deployment becomes a
+    real use case.
 16. **Forget-me doesn't call `sign_out()`** (found while re-examining Phase 4
     step 4c's design). The forget-me handler clears local session state and
     the persistence cookie, but never revokes the Supabase session itself —

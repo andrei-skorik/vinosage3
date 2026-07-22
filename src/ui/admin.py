@@ -6,7 +6,7 @@ import io
 import streamlit as st
 
 from src.catalog import get_service_db, invalidate_cache
-from src.config import CHAT_MODELS, DEFAULT_MODEL, LANGSMITH_ENABLED, LANGSMITH_PROJECT
+from src.config import CHAT_MODELS, LANGSMITH_ENABLED, LANGSMITH_PROJECT
 from src.i18n import t
 
 # Mirrors the CHECK constraint in sql/09_tool_logs_extend.sql — the 5
@@ -15,6 +15,24 @@ _ALL_TOOLS = (
     "filter_wines", "pair_with_food", "calculate_budget", "compare_wines", "wine_stats",
     "explain_wine_concept", "recommend_for_me",
 )
+
+# Sentinel for the dev-panel model selectbox — see _resolve_model_override.
+_NO_MODEL_OVERRIDE = "— auto (Quick/In-Depth) —"
+
+
+def _resolve_model_override(selected: str) -> str | None:
+    """None means "don't override — let Quick/In-Depth decide" (SPEC §5.6).
+
+    st.selectbox always returns a concrete option, never None — so without
+    this sentinel mapping, merely rendering the selectbox (i.e. an admin
+    unlocking the dev panel just to look, without touching the dropdown)
+    would silently start overriding every user's Quick/In-Depth toggle for
+    the rest of the session, since `app.py` treats any truthy
+    dev_model_override as "use this instead." Only an explicit pick of a
+    real model should override; picking the sentinel again restores normal
+    behaviour.
+    """
+    return None if selected == _NO_MODEL_OVERRIDE else selected
 
 
 def render_admin(locale: str) -> None:
@@ -55,16 +73,18 @@ def _render_dev_settings(locale: str) -> None:
 
     Everything here is dev-only (US-007): no model name, temperature, or
     system prompt is ever shown outside this password-gated tab. Defaults
-    (DEFAULT_MODEL, 0.2, all tools enabled) match the end-user path exactly,
-    so simply unlocking the tab changes nothing until an admin moves a
-    control.
+    (0.2, all tools enabled) match the end-user path exactly, and the model
+    selectbox defaults to the "auto" sentinel (see _resolve_model_override)
+    for the same reason — simply unlocking the tab must change nothing until
+    an admin explicitly moves a control.
     """
-    model_list = list(CHAT_MODELS.keys())
-    current = st.session_state.get("dev_model_override") or DEFAULT_MODEL
+    model_list = [_NO_MODEL_OVERRIDE] + list(CHAT_MODELS.keys())
+    current = st.session_state.get("dev_model_override") or _NO_MODEL_OVERRIDE
     idx = model_list.index(current) if current in model_list else 0
-    st.session_state.dev_model_override = st.selectbox(
+    selected_model = st.selectbox(
         t("admin_model_label", locale), options=model_list, index=idx, key="dev_model_select",
     )
+    st.session_state.dev_model_override = _resolve_model_override(selected_model)
 
     st.session_state.dev_temperature = st.slider(
         t("admin_temp_label", locale),
