@@ -65,7 +65,7 @@ regression test. Then four backlog items landed on top.
 Plus the inherited v2.0 test-coverage gaps closed (locale-file parity with
 placeholder checks, LangSmith-absence, cost-cap boundaries incl. pinned
 fail-open, anonymous-feedback invariant, preference-extraction
-false-positive regression) — **292 total unit tests**.
+false-positive regression) — **308 total unit tests**.
 
 ### New in v3.1: `sql/10_stt_usage.sql`
 
@@ -98,7 +98,7 @@ and a smarter recommendation loop.
 | **Admin feedback insights** | New admin-panel section: per-wine 👍/👎 counts + down-share (a purchasing signal for the shop) and an overall acceptance rate with a trend-by-date chart and breakdowns by model/locale — a free, continuous quality signal alongside the offline Ragas evals (`src/feedback_insights.py`). |
 | **Rate-limit memory-leak fix** | `src/ratelimit.py`'s in-memory sliding-window dict used to grow one entry per browser session forever. A lazy periodic sweep now purges any session whose window has fully expired, bounding memory on long-lived deployments — with zero change to allow/block semantics. |
 | **Anti-hallucination defense-in-depth repair** | The triple food-keyword defense (three deliberately independent copies, one per layer) had quietly drifted apart over time — 30 dishes (prawn, crab, soup, stew, scallop, …) were recognised by the catalog tool but not by the two evidence-filter layers or the router. Fixed and locked behind a sync test that fails the build on any future drift. |
-| **Unit-test growth** | +47 new tests across the five v3.0 steps (checkpointer, rate-limit, keyword-sync, transcription, feedback exclusion/insights), all mocked — no real DB/LLM/audio calls required to run the suite. (v3.1 later grew the suite to 292.) |
+| **Unit-test growth** | +47 new tests across the five v3.0 steps (checkpointer, rate-limit, keyword-sync, transcription, feedback exclusion/insights), all mocked — no real DB/LLM/audio calls required to run the suite. (v3.1 later grew the suite to 308.) |
 
 ### New environment variables (v3.0, all optional)
 
@@ -392,7 +392,7 @@ Full eval suite (Ragas): `pip install -r requirements-eval.txt` (Linux/CI only; 
 Unit tests cover all 7 tools, RAG, i18n, the guard, taste-profile/preferences
 logic, the durable checkpointer, rate limiting, food-keyword sync, voice
 transcription, feedback exclusion/insights, auth persistence, session
-reset, multilingual routing, and locale parity — 292 tests, ~25 s, all
+reset, multilingual routing, and locale parity — 308 tests, ~25 s, all
 mocked (no real DB/LLM/audio calls needed).
 Integration eval tests (US-001..011 + 8 edge cases) are excluded by default.
 
