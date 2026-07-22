@@ -27,6 +27,8 @@ rapidfuzz · pytest · LangSmith
 
 ![VinoSage chat screenshot](screenshots/chat.png)
 
+![Admin feedback insights](screenshots/admin.png)
+
 ## What's new in v3.1
 
 v3.0 shipped the features; v3.1 is what happened when a human ran a
