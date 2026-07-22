@@ -216,6 +216,35 @@ def _render_analytics(locale: str) -> None:
         st.error(f"Analytics unavailable: {exc}")
 
 
+def _user_logins(db) -> dict[str, str]:
+    """{user_id: local-part-of-email} via the Admin API.
+
+    Emails live in Supabase Auth's auth.users, a different schema from the
+    one PostgREST exposes (our db.table(...) calls only ever reach public.*)
+    — the Admin API (GoTrue, same service-role client) is the sanctioned way
+    to read them without adding a new view/RPC just for a display label.
+    Paginated (200/page) since list_users() doesn't return everyone at once.
+    Swallows all exceptions — a lookup failure just leaves the login column
+    blank, it must never break the rest of the stats table.
+    """
+    logins: dict[str, str] = {}
+    try:
+        page = 1
+        while True:
+            users = db.auth.admin.list_users(page=page, per_page=200)
+            if not users:
+                break
+            for u in users:
+                if u.email:
+                    logins[u.id] = u.email.split("@")[0]
+            if len(users) < 200:
+                break
+            page += 1
+    except Exception:
+        pass
+    return logins
+
+
 def _render_user_stats(locale: str) -> None:
     """Per-user totals computed on read (Block 2: no new aggregates table) —
     same batched-join pattern as _render_analytics, restricted to non-null
@@ -285,8 +314,11 @@ def _render_user_stats(locale: str) -> None:
         )
         stats["total_cost_eur"] = stats["total_cost_micros"] / 1_000_000
 
+        logins = _user_logins(db)
+        stats["login"] = stats["user_id"].map(logins).fillna("")
+
         st.dataframe(
-            stats[["user_id", "query_count", "total_tokens", "total_cost_eur",
+            stats[["user_id", "login", "query_count", "total_tokens", "total_cost_eur",
                    "feedback_up", "feedback_down", "last_active"]],
             use_container_width=True,
         )
