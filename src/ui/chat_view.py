@@ -15,6 +15,17 @@ from src.i18n import t, tlist
 _EXAMPLE_COUNT = 3
 
 
+def _clean_meta_str(val: Any) -> str | None:
+    """Guard against pandas NaN — a DataFrame row's missing string field
+    (region/country/etc.) comes back as NaN (a TRUTHY float, not None) from
+    row.get(...) in filter_wines.py/compare_wines.py. Checked here, at the
+    one place all tool-sourced wine dicts converge for card display, rather
+    than patching every tool's DataFrame-to-dict conversion (some of which
+    are on the do-not-touch list) or every future tool that might do the same.
+    """
+    return val if isinstance(val, str) and val else None
+
+
 _SUGGESTION_ICONS = ("🍷", "🍾")
 
 
@@ -502,9 +513,10 @@ def render_feedback_buttons(
         with st.container(border=True, key=f"wine_card_{query_id}_{wine_id}"):
             col_label, col_up, col_down = st.columns([6, 1, 1], vertical_alignment="center")
 
-            meta_parts = [p for p in (w.get("region") or w.get("country"),) if p]
+            region_or_country = _clean_meta_str(w.get("region")) or _clean_meta_str(w.get("country"))
+            meta_parts = [region_or_country] if region_or_country else []
             price = w.get("price_eur")
-            if price is not None:
+            if isinstance(price, (int, float)) and price == price:  # excludes NaN (NaN != NaN)
                 meta_parts.append(f"€{price:.2f}")
             meta = " · ".join(meta_parts)
             label_md = f"**{w.get('title', '')}**"
