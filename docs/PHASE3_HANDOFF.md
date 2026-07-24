@@ -1527,6 +1527,33 @@ None of these are blocking; revisit only on concrete product/ops need.
     for full detail — this turned out to be the SAME load-time hydration
     gap as the live "logout→login shows every card grey" bug, not a
     separate cosmetic nice-to-have as originally framed here.
+18. **No way for a user to delete their actual account** — only its data.
+    "Forget everything about me" erases/anonymizes app-side data
+    (preferences, durable thread, feedback rows, `query_logs`/
+    `security_events` content) but never touches the Supabase Auth account
+    itself (`auth.users`) — the email/password stays valid indefinitely, and
+    (per Backlog #16 above) the session isn't even signed out server-side.
+    A user who logs back in after forget-me gets a pristine, empty profile,
+    but the account's existence is never actually erased. Arguably a GDPR
+    "right to erasure" gap, since that right is generally understood to
+    cover the account, not just its associated data. Fix would be
+    `auth.admin.delete_user(user_id)` via the same service-role Admin API
+    already used for the per-user-stats login column
+    (`src/ui/admin.py::_user_logins`) — `user_profiles` already has
+    `on delete cascade` from `auth.users`, so the app-data cleanup would
+    follow automatically. Not implemented; flagged only, per explicit ask.
+
+    **Design decision (human, recorded ahead of implementation):** account
+    deletion must be a **separate** feature from "Forget everything about
+    me," not folded into it — a distinct **"Delete My Account"** button
+    placed next to "Log Out" in the profile widget
+    (`src/ui/auth_view.py::render_profile_widget`). Clicking it must show a
+    confirmation/warning step first (same popover-confirm pattern already
+    used for forget-me in `src/ui/sidebar.py`); only on explicit confirmation
+    does the actual account deletion proceed. Two independent destructive
+    actions, two independent confirmations — a user should be able to erase
+    their data (forget-me) without deleting their login, and vice versa is
+    not offered (deleting the account inherently erases everything anyway).
 
 ---
 
