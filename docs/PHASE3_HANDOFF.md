@@ -50,9 +50,9 @@
 ## Phase 4 — final summary (steps 1–4c, + post-4c fixes)
 
 All six Phase 4 tasks are complete, committed, and human-smoke-tested. The
-follow-up fixes below are complete and human-smoke-verified too, except the
-last row (model-override fix), which is implemented + unit-tested and
-awaiting its human smoke test + commit. Test count: **308 passed**, 22
+follow-up fixes below are complete, human-smoke-verified, and committed too,
+except the last row ("Delete My Account"), implemented + unit-tested and
+awaiting commit + its human smoke test. Test count: **327 passed**, 22
 deselected (integration/eval), up from 249 at the end of Phase 3.
 
 | Step | What | Commit | Tests after |
@@ -66,7 +66,13 @@ deselected (integration/eval), up from 249 at the end of Phase 3.
 | — | Fix feedback-highlight leak across turns: `_rating_key(query_id, wine_id)` scoping for the ratings-dict read/write AND the CSS marker (the marker-collision half wasn't named in the task brief). Follows a human-authored duplicate-key fix (`639be50`, container key only). | `46eb947` | 297 |
 | — | Hydrate feedback highlight from DB on history reload: new `get_feedback_ratings` (replaces the now-fully-dead `get_latest_ratings`, deleted), both `(query_id, wine_id)`-keyed | `095d6af` | 306 |
 | — | Security hardening: enable RLS on the LangGraph checkpointer tables (`sql/11_checkpointer_rls.sql`) — closed a Supabase Security Advisor finding | `065d5b9` | 306 (no code test delta — SQL-only) |
-| — | Fix: dev-panel model override was silently overriding Quick/In-Depth (`_resolve_model_override` sentinel, `src/ui/admin.py`) — found via a user-reported by-model discrepancy in the feedback insights panel | *(pending commit + human smoke test)* | 308 |
+| — | Fix: dev-panel model override was silently overriding Quick/In-Depth (`_resolve_model_override` sentinel, `src/ui/admin.py`) — found via a user-reported by-model discrepancy in the feedback insights panel | `d9e2da2` | 308 |
+| — | Feature: login column in the per-user-stats admin table (`_user_logins`, Admin API) | `685f026` | 312 |
+| — | Fix: wine-card metadata crash on pandas NaN region/country (`_clean_meta_str`) | `3214f46` | 317 |
+| — | Design decision recorded (no code): "Delete My Account" must be a separate feature from forget-me — see below | `c9d15ea` | 317 |
+| — | Fix: toggling a rating off in one session wiped the wine's ratings from every other session (`delete_feedback` now scoped by `query_id`, not just `user_id`+`wine_id`) | `a46172a` | 319 |
+| — | Fix: sidebar "Export conversation" buttons periodically disappeared after F5/login (`render_sidebar()` reordered after durable-thread rehydration) | `c247c8c` | 319 (no test delta — pure reorder) |
+| — | Feature: "Delete My Account" (resolves Backlog #18) — separate button + confirmation, `src/auth.py::delete_account`, Admin API + `erase_user_history` FK workaround (see its own section below) | *(pending commit + human smoke test)* | 327 |
 
 See each step's own section below for full detail; "Known accepted gaps" §3
 and the Backlog carry the cross-references.
@@ -1616,33 +1622,131 @@ None of these are blocking; revisit only on concrete product/ops need.
     for full detail — this turned out to be the SAME load-time hydration
     gap as the live "logout→login shows every card grey" bug, not a
     separate cosmetic nice-to-have as originally framed here.
-18. **No way for a user to delete their actual account** — only its data.
-    "Forget everything about me" erases/anonymizes app-side data
-    (preferences, durable thread, feedback rows, `query_logs`/
-    `security_events` content) but never touches the Supabase Auth account
-    itself (`auth.users`) — the email/password stays valid indefinitely, and
-    (per Backlog #16 above) the session isn't even signed out server-side.
-    A user who logs back in after forget-me gets a pristine, empty profile,
-    but the account's existence is never actually erased. Arguably a GDPR
-    "right to erasure" gap, since that right is generally understood to
-    cover the account, not just its associated data. Fix would be
-    `auth.admin.delete_user(user_id)` via the same service-role Admin API
-    already used for the per-user-stats login column
-    (`src/ui/admin.py::_user_logins`) — `user_profiles` already has
-    `on delete cascade` from `auth.users`, so the app-data cleanup would
-    follow automatically. Not implemented; flagged only, per explicit ask.
+18. ~~No way for a user to delete their actual account~~ **RESOLVED — see
+    "Feature: Delete My Account" below.**
 
-    **Design decision (human, recorded ahead of implementation):** account
-    deletion must be a **separate** feature from "Forget everything about
-    me," not folded into it — a distinct **"Delete My Account"** button
-    placed next to "Log Out" in the profile widget
-    (`src/ui/auth_view.py::render_profile_widget`). Clicking it must show a
-    confirmation/warning step first (same popover-confirm pattern already
-    used for forget-me in `src/ui/sidebar.py`); only on explicit confirmation
-    does the actual account deletion proceed. Two independent destructive
-    actions, two independent confirmations — a user should be able to erase
-    their data (forget-me) without deleting their login, and vice versa is
-    not offered (deleting the account inherently erases everything anyway).
+---
+
+## Feature: "Delete My Account" (resolves Backlog #18)
+
+**Design decision (human, recorded ahead of implementation, honored as
+specified):** account deletion is a **separate** feature from "Forget
+everything about me," not folded into it — a distinct **"Delete My
+Account"** button in the profile widget
+(`src/ui/auth_view.py::render_profile_widget`). Original placement: same
+row as "Log Out" (delete on the left, logout on the right — closer to the
+chat itself) — **superseded by UI polish round 2 below**, which moved it
+inside the expandable avatar panel instead; "Log Out" is back to its
+original standalone full-width button. Styled like the sidebar's "New Chat"
+button (`type="primary"`, the app's accent colour). Clicking it shows a
+confirmation/warning step first (the same popover-confirm pattern already
+used for forget-me in `src/ui/sidebar.py`) — only on explicit confirmation
+does the actual deletion proceed. Two independent destructive actions, two
+independent confirmations: a user can erase their data (forget-me) without
+deleting their login, and vice versa isn't offered as a separate step since
+deleting the account inherently erases everything
+anyway.
+
+**UI polish round 1 (human-reported after the first pass):**
+1. The trigger button (`"Delete My Account"` + `:material/delete:` icon)
+   wrapped onto 3 lines at column width — too tall next to "Log Out". Fixed
+   *at the time* by dropping the icon and shortening the label to "Delete
+   Account" — **superseded by round 2 below**, which removes the
+   column-sharing problem at its root instead.
+2. Clicking "Cancel" inside the popover didn't close it — only clicking
+   outside did (an `st.popover` limitation: buttons *inside* it don't
+   dismiss it, and there's no programmatic close). Fixed with the same
+   widget-key-rotation trick already used for the voice recorder
+   (`_voice_widget_gen`): the popover now mounts under
+   `key=f"delete_account_popover_{delete_popover_gen}"`, and Cancel bumps
+   `st.session_state["_delete_popover_gen"]` + calls `st.rerun()` — the next
+   render mounts a fresh, closed instance. `test_cancel_click_rotates_popover_key_and_reruns`
+   pins the Python-side half of this (counter bump + rerun call); the actual
+   visual "does it close" effect is browser-only, left to the human smoke
+   test below. **Still current** — unaffected by round 2.
+
+**UI polish round 2 (human-requested, still too tall even shortened):**
+moved the whole button INSIDE the expandable avatar-upload panel (behind
+the pencil icon ✏️), right after the file-uploader — its own full-width row
+with nothing to share space with, so the FULL label + icon can come back:
+`"Delete My Account"` + `:material/delete:`, one line, no cropping. "Log
+Out" reverts to its original single centered full-width button (no longer
+split into two columns). `st.divider()` added before the button inside the
+panel for visual separation from the uploader above it. Every wiring test
+in `tests/test_auth.py` now pre-sets `_show_avatar_uploader = True` to
+reach the button; new `test_delete_account_not_reachable_when_avatar_panel_closed`
+confirms it's genuinely unreachable (no stray click can fire it) while the
+panel is collapsed, which is the default state.
+
+**Implementation — `src/auth.py::delete_account(user_id) -> bool`:** the
+one deliberate exception to this module's "anon-key client only" rule
+(stated up front in the module docstring) — permanently deleting an
+`auth.users` row is an Admin API operation, unreachable via an anon/user
+session by design, so it requires the service-role client
+(`src/catalog.py::get_service_db()`), same as `src/ui/admin.py::_user_logins`
+already uses for the per-user-stats login column.
+
+**FK landmine found while implementing (not obvious from the schema alone
+— checked every `references auth.users(id)` across `sql/04/06/07/08/10`
+before writing this):**
+- `user_profiles`, `user_preferences`, `recommendation_feedback` — all
+  `on delete cascade` — Postgres deletes these automatically the instant
+  the account row is gone.
+- `security_events`, `stt_usage` — both `on delete set null` — automatically
+  nulled, content stays (same trade-off `erase_user_history` already makes
+  for forget-me).
+- `query_logs.user_id` — **no `on delete` clause at all** (sql/04). Calling
+  `auth.admin.delete_user()` while any `query_logs` row still points to that
+  user would hit a foreign-key violation and fail outright. `delete_account`
+  therefore calls `erase_user_history(user_id)` FIRST — it already nulls
+  `query_logs.user_id` for exactly this reason (its `security_events` half
+  is redundant here, since that column would be auto-nulled anyway, but
+  harmless). This is calling `erase_user_history` as a **data utility**, not
+  as a dependency on the forget-me feature/button — the two remain
+  independently triggerable, per the design decision above.
+
+The durable checkpointer thread (`user:{user_id}`) is NOT a foreign key of
+`auth.users` — the langgraph library's tables use a plain text `thread_id`,
+so deleting the account would silently leave the full conversation history
+behind forever unless explicitly cleaned up. The UI handler (not
+`delete_account` itself) calls `delete_thread(f"user:{user_id}")` after a
+successful account delete, then `clear_token()` and `reset_to_anonymous()`
+— the same session-cleanup calls logout already makes, since the user is
+obviously no longer authenticated as an account that no longer exists.
+
+**Locale keys** added to all four `locales/*.json`: `delete_account`,
+`delete_account_confirm`, `delete_account_yes`, `delete_account_cancel`,
+`delete_account_done`, `delete_account_error`.
+
+**Tests:** `tests/test_auth.py` (8 tests) — `delete_account` calls
+`erase_user_history` before the Admin API delete (order asserted), swallows
+exceptions from either step, returns `False` on failure; the UI wiring —
+confirm click calls `delete_account` → `delete_thread` → `clear_token` →
+`reset_to_anonymous` in that order, a no-click makes zero destructive calls,
+a failed `delete_account` shows the error without running the
+thread-delete/reset steps, Cancel bumps the popover-rotation counter +
+reruns, and (round 2) the whole flow is unreachable while the avatar panel
+is collapsed — the default state.
+
+**Verified:** full suite green, **327 passed** (was 319, +8 exactly).
+`git diff --stat`: `src/auth.py`, `src/ui/auth_view.py`, all four
+`locales/*.json`, `tests/test_auth.py` (new) — no `sql/` changes (no schema
+needed; the FK behavior already supports this via existing cascade/set-null
+clauses, only `query_logs` needed the pre-existing `erase_user_history` as
+a workaround).
+
+**Human-only checklist (not yet done — pass to the human):** log in → click
+the pencil ✏️ → confirm "Delete My Account" (full label + trash icon) reads
+on one line inside the expanded avatar panel, below the uploader → open the
+popover, click Cancel → confirm it actually collapses without having to
+click elsewhere → confirm "Log Out" is back to a single centered full-width
+button → reopen the avatar panel, confirm for real → immediately anonymous,
+age gate shown; try logging back in with the same email/password → must
+fail (account gone); spot-check in Supabase: `auth.users` row gone,
+`user_profiles`/`user_preferences`/`recommendation_feedback` rows gone
+(cascade), `query_logs`/`security_events` rows for that user_id
+anonymized/nulled but present (cost accounting intact), checkpointer
+`user:{id}` thread gone.
 
 ---
 

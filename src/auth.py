@@ -3,6 +3,10 @@
 Auth and per-user data (profile, avatar) always go through a fresh anon-key
 client with the user's session attached, so RLS (auth.uid() = user_id)
 resolves correctly — never the service-role client for these operations.
+The one deliberate exception is delete_account(): permanently deleting an
+auth.users row is an Admin API operation, unreachable via an anon/user
+session by design, so it's the only function here that takes the
+service-role client (see its own docstring for why).
 
 Streamlit reruns the whole script on every interaction, so no Python object
 survives between reruns except st.session_state — the access/refresh tokens
@@ -109,6 +113,40 @@ def sign_out(access_token: str, refresh_token: str) -> None:
         _authed_client(access_token, refresh_token).auth.sign_out()
     except Exception:
         pass  # a failed remote sign-out shouldn't block clearing local state
+
+
+def delete_account(user_id: str) -> bool:
+    """Permanently delete this user's Supabase Auth account (the "Delete My
+    Account" button) — a separate, heavier action than "Forget everything
+    about me", which only ever erases app-data and never touches auth.users
+    (see docs/PHASE3_HANDOFF.md Backlog #18). Deliberately not implemented
+    in terms of that feature's handler; it only reuses erase_user_history as
+    a data utility, for the technical reason below.
+
+    Requires the service-role client (Admin API) — deleting an auth.users
+    row is not something an anon/user session can ever do, unlike every
+    other function in this module. `user_profiles`, `user_preferences`, and
+    `recommendation_feedback` all have `on delete cascade` from auth.users
+    (sql/04, sql/06, sql/08), and `security_events`/`stt_usage` have
+    `on delete set null` (sql/07, sql/10) — Postgres cleans all of those up
+    automatically the instant the account row is gone. `query_logs.user_id`
+    has NEITHER clause (sql/04): deleting the account while it's still set
+    would hit a foreign-key violation, so it must be nulled out first —
+    erase_user_history already does exactly that (the security_events half
+    is redundant here but harmless), which is why it's called first.
+
+    Returns False (never raises) on any failure, so the caller can show a
+    generic error instead of a false success.
+    """
+    try:
+        from src.catalog import get_service_db
+        from src.logging_db import erase_user_history
+
+        erase_user_history(user_id)  # unblocks query_logs' FK — see docstring
+        get_service_db().auth.admin.delete_user(user_id)
+        return True
+    except Exception:
+        return False
 
 
 def get_profile(access_token: str, refresh_token: str, user_id: str) -> dict[str, Any] | None:

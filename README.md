@@ -48,6 +48,7 @@ regression test. Then four backlog items landed on top.
 | **Multilingual food detection** | The 30 dishes added in v3.0's keyword-sync repair are now recognised in all four languages: explicit German singular/plural forms, and stem matching for Russian and Finnish (new `_FI_FOOD_STEMS`, mirroring the proven RU mechanism — "keittoon", "пельменям" and "Suppen" all route correctly). |
 | **Voice spend in the cost cap** | Whisper transcription is billed per audio second; those costs are now recorded (`sql/10_stt_usage.sql`) and counted toward the €1/day cap alongside token spend — the two sources sum independently and degrade independently. |
 | **Anon-thread housekeeping** | One admin-panel button sweeps the ephemeral `anon:*` checkpointer threads (safe by construction — anonymous sessions never read checkpoint state back). |
+| **Delete My Account** | A separate, explicitly-confirmed button next to "Log Out" — permanently deletes the Supabase Auth account itself (`src/auth.py::delete_account`, Admin API), not just its data. Deliberately independent of "Forget me" (which never touches `auth.users`); `query_logs.user_id` has no cascade/set-null clause, so `erase_user_history` runs first to unblock the foreign key, then the account, durable thread, and login cookie are all cleared. |
 
 ### Smoke-campaign fixes (all with regression tests)
 
@@ -65,7 +66,7 @@ regression test. Then four backlog items landed on top.
 Plus the inherited v2.0 test-coverage gaps closed (locale-file parity with
 placeholder checks, LangSmith-absence, cost-cap boundaries incl. pinned
 fail-open, anonymous-feedback invariant, preference-extraction
-false-positive regression) — **319 total unit tests**.
+false-positive regression) — **327 total unit tests**.
 
 ### New in v3.1: `sql/10_stt_usage.sql`
 
@@ -98,7 +99,7 @@ and a smarter recommendation loop.
 | **Admin feedback insights** | New admin-panel section: per-wine 👍/👎 counts + down-share (a purchasing signal for the shop) and an overall acceptance rate with a trend-by-date chart and breakdowns by model/locale — a free, continuous quality signal alongside the offline Ragas evals (`src/feedback_insights.py`). |
 | **Rate-limit memory-leak fix** | `src/ratelimit.py`'s in-memory sliding-window dict used to grow one entry per browser session forever. A lazy periodic sweep now purges any session whose window has fully expired, bounding memory on long-lived deployments — with zero change to allow/block semantics. |
 | **Anti-hallucination defense-in-depth repair** | The triple food-keyword defense (three deliberately independent copies, one per layer) had quietly drifted apart over time — 30 dishes (prawn, crab, soup, stew, scallop, …) were recognised by the catalog tool but not by the two evidence-filter layers or the router. Fixed and locked behind a sync test that fails the build on any future drift. |
-| **Unit-test growth** | +47 new tests across the five v3.0 steps (checkpointer, rate-limit, keyword-sync, transcription, feedback exclusion/insights), all mocked — no real DB/LLM/audio calls required to run the suite. (v3.1 later grew the suite to 319.) |
+| **Unit-test growth** | +47 new tests across the five v3.0 steps (checkpointer, rate-limit, keyword-sync, transcription, feedback exclusion/insights), all mocked — no real DB/LLM/audio calls required to run the suite. (v3.1 later grew the suite to 327.) |
 
 ### New environment variables (v3.0, all optional)
 
@@ -392,7 +393,7 @@ Full eval suite (Ragas): `pip install -r requirements-eval.txt` (Linux/CI only; 
 Unit tests cover all 7 tools, RAG, i18n, the guard, taste-profile/preferences
 logic, the durable checkpointer, rate limiting, food-keyword sync, voice
 transcription, feedback exclusion/insights, auth persistence, session
-reset, multilingual routing, and locale parity — 319 tests, ~25 s, all
+reset, multilingual routing, and locale parity — 327 tests, ~25 s, all
 mocked (no real DB/LLM/audio calls needed).
 Integration eval tests (US-001..011 + 8 edge cases) are excluded by default.
 
@@ -518,10 +519,18 @@ vinosage/
 │   ├── test_feedback_anonymous.py # anon users never write feedback
 │   ├── test_extract_preferences_regression.py
 │   ├── test_title_matching.py     # typography-safe feedback buttons
+│   ├── test_recommend_freshness.py # recommend_for_me called fresh every turn
+│   ├── test_fold_guard.py         # §5.4: explicit preference wins over a single 👎
 │   ├── test_food_query_multilingual.py  # DE/RU/FI routing (v3.1)
 │   ├── test_auth_persistence.py   # cookie flows + token rotation (v3.1)
 │   ├── test_session_reset.py      # logout hygiene (v3.1)
 │   ├── test_logging_db.py         # feedback deletion + history erasure (v3.1)
+│   ├── test_feedback_highlight_scoping.py  # cross-turn highlight leak fix (v3.1)
+│   ├── test_feedback_hydration.py # DB→UI highlight hydration on history reload (v3.1)
+│   ├── test_fold_provenance.py    # un-fold reverts exactly what fold applied
+│   ├── test_admin.py              # dev-panel model override + per-user login column (v3.1)
+│   ├── test_chat_view_meta.py     # wine-card metadata NaN crash fix (v3.1)
+│   ├── test_auth.py               # Delete My Account (v3.1)
 │   └── eval/
 │       └── test_agent_eval.py  # integration, requires real API
 │

@@ -16,6 +16,7 @@ from src.auth import (
     AuthSession,
     create_profile,
     default_avatar_url,
+    delete_account,
     get_profile,
     get_query_history,
     sign_in,
@@ -209,6 +210,42 @@ def render_profile_widget(locale: str) -> None:
                 st.rerun()
             else:
                 st.error(t("avatar_upload_error", locale))
+
+        # "Delete My Account" — tucked inside the expandable avatar panel
+        # (behind the pencil icon), on its own full-width row, so its label
+        # never has to share space with "Log Out" (human-reported: a
+        # two-column split made a full label + icon wrap onto 3 lines).
+        # Deliberately NOT built on "Forget everything about me"
+        # (src/ui/sidebar.py) — that erases app-data only and never touches
+        # the Supabase Auth account (docs/PHASE3_HANDOFF.md Backlog #18);
+        # this one ends the account itself.
+        st.divider()
+        # Rotating the popover's key is the same trick used for the voice
+        # recorder widget (_voice_widget_gen): st.popover has no programmatic
+        # close, and clicking a button INSIDE it (Cancel) does not dismiss it
+        # (only clicking outside does) — mounting a fresh instance under a
+        # new key on the next rerun is the only way to force it shut.
+        delete_popover_gen = st.session_state.setdefault("_delete_popover_gen", 0)
+        with st.popover(
+            t("delete_account", locale), icon=":material/delete:",
+            type="primary", use_container_width=True,
+            key=f"delete_account_popover_{delete_popover_gen}",
+        ):
+            st.warning(t("delete_account_confirm", locale))
+            col_yes, col_cancel = st.columns(2)
+            if col_yes.button(t("delete_account_yes", locale), key="delete_account_yes_btn", type="primary"):
+                if delete_account(auth["user_id"]):
+                    from src.graph import delete_thread
+                    delete_thread(f"user:{auth['user_id']}")  # durable chat is separate from auth.users
+                    clear_token()
+                    st.success(t("delete_account_done", locale))
+                    from src.ui.session_reset import reset_to_anonymous
+                    reset_to_anonymous()
+                else:
+                    st.error(t("delete_account_error", locale))
+            if col_cancel.button(t("delete_account_cancel", locale), key="delete_account_cancel_btn"):
+                st.session_state["_delete_popover_gen"] = delete_popover_gen + 1
+                st.rerun()
 
     if st.button(f"🚪 {t('logout_button', locale)}", use_container_width=True, key="logout_btn"):
         sign_out(auth["access_token"], auth["refresh_token"])
