@@ -234,9 +234,6 @@ def main() -> None:
     emit_pending_cookie()
     try_restore_session()
 
-    render_sidebar()
-
-    locale     = st.session_state.locale
     session_id = st.session_state.session_id
 
     # ── Durable conversation thread (SPEC step 9) ─────────────────────────────
@@ -246,6 +243,13 @@ def main() -> None:
     # session). Rehydration runs once per Streamlit session and only when the
     # in-memory chat is empty, so it never clobbers an ongoing conversation
     # (e.g. a user who logs in mid-chat keeps what's on screen).
+    #
+    # Must run BEFORE render_sidebar(): the sidebar's "Export conversation"
+    # section is gated on st.session_state.messages being non-empty. When
+    # this block ran AFTER render_sidebar(), a fresh F5/login populated
+    # messages too late for that same run's sidebar draw — the chat window
+    # correctly showed the restored history, but the export buttons stayed
+    # hidden until the next rerun (human-reported: "periodically disappear").
     _auth_now = _current_user()
     thread_id = resolve_thread_id(_auth_now.get("user_id") if _auth_now else None, session_id)
     if _auth_now and not st.session_state.messages and not st.session_state.get("_chat_rehydrated"):
@@ -253,6 +257,10 @@ def main() -> None:
         _persisted = get_thread_chat_log(thread_id)
         if _persisted:
             st.session_state.messages = [rehydrate_chat_entry(m) for m in _persisted]
+
+    render_sidebar()
+
+    locale = st.session_state.locale
 
     # Quick/In-depth is the only model choice end users ever see (SPEC §5.6).
     # A dev panel selection (admin-only) overrides it for the rest of the

@@ -920,6 +920,36 @@ no schema change).
 
 ---
 
+## Fix: sidebar "Export conversation" buttons periodically disappeared
+
+**Found by the human**: the sidebar's "Export conversation" section (JSON/
+CSV download buttons) would intermittently be missing — not a random
+flicker, but reproducible right after a browser refresh (F5) or a fresh
+login, until the next interaction brought it back.
+
+**Root cause:** `app.py::main()` called `render_sidebar()` **before** the
+durable-conversation-thread rehydration block. The sidebar's export section
+is gated on `st.session_state.messages` being non-empty; on a fresh F5/login
+for a logged-in user, `messages` starts empty and only gets populated by the
+rehydration block a few lines *later in the same run* (restoring the
+persisted chat from the checkpointer). Since the sidebar had already been
+drawn by that point, it rendered with the stale, still-empty `messages` —
+the main chat window (rendered further down, after rehydration) correctly
+showed the restored history, but the sidebar's export section stayed hidden
+until whatever rerun happened next (sending a message, clicking anything).
+
+**Fix:** reordered `app.py::main()` — the durable-thread rehydration block
+(and its `session_id` read) now runs *before* `render_sidebar()`, so the
+sidebar always sees the final, correct `messages` for that run. Pure
+reorder, no logic changed; `try_restore_session()` still runs before both,
+unchanged. `git diff --stat`: `app.py` only.
+
+**Human-only checklist (not yet done — pass to the human):** log in, send a
+message, F5 → confirm the Export section is visible immediately on the
+FIRST render after refresh (not only after a subsequent interaction).
+
+---
+
 ## Step 4 — voice input via Whisper (`docs/phase3/step4_voice/`)
 
 **Status:** Done, pending human smoke test with a real mic + real API call.
