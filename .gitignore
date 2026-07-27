@@ -18,6 +18,7 @@ docs/*
 !docs/phase3/
 !docs/phase3.1/
 !docs/PHASE3_HANDOFF.md
+!docs/Changelog.md
 
 # Only the task specs themselves are tracked — reference/example code
 # snapshots bundled alongside them (app.py, checkpointer.py, tests, etc.)
