@@ -145,7 +145,7 @@ def test_authenticated_toggle_off_calls_delete_and_fold_none(monkeypatch):
     )
 
     assert ratings[chat_view._rating_key("q1", "w-1")] is None
-    assert calls["delete"] == {"user_id": "user-42", "wine_id": "w-1"}
+    assert calls["delete"] == {"user_id": "user-42", "query_id": "q1", "wine_id": "w-1"}
     assert calls["fold"] == ("user-42", wine, "none", recorded_delta)
 
 

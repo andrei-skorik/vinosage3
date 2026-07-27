@@ -326,13 +326,14 @@ def _toggle_feedback(
 
     if previous == direction:
         # Toggle off: revert exactly what the active fold recorded, then
-        # delete the row (delete_feedback removes ALL rows for this wine,
-        # matching its existing no-query_id-scoped behavior).
+        # delete ONLY this (user_id, query_id, wine_id) row — a sibling
+        # turn's rating on the same wine must survive (see delete_feedback's
+        # docstring for the admin-table disappearance bug this fixes).
         ratings[key] = None
         if user_id:
             reason = get_feedback_reason(user_id=user_id, query_id=query_id, wine_id=wine_id)
             fold_feedback(user_id, wine, "none", delta=reason)
-            delete_feedback(user_id=user_id, wine_id=wine_id)
+            delete_feedback(user_id=user_id, query_id=query_id, wine_id=wine_id)
             if fold_cache:
                 fold_cache(wine, "none", delta=reason)
         return

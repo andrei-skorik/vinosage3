@@ -1,9 +1,43 @@
 """Unit tests for src/logging_db.py's direct DB-facing functions."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
-from src.logging_db import delete_all_feedback, erase_user_history, get_feedback_ratings
+from src.logging_db import delete_all_feedback, delete_feedback, erase_user_history, get_feedback_ratings
+
+
+def test_delete_feedback_scopes_by_user_query_and_wine():
+    """Bug fix: toggling a rating off in ONE session must delete ONLY that
+    (user_id, query_id, wine_id) row — recommendation_feedback's own unique
+    constraint (sql/08). The same user can independently rate the same wine
+    across different turns/sessions (the exact cross-turn scenario the
+    highlight-leak fix covers); a query_id-unscoped delete here silently
+    wiped every OTHER turn's rating too, making the wine vanish entirely
+    from the admin 'Per-wine feedback' table even though other (query_id,
+    wine) rows for it were never meant to be touched."""
+    mock_table = MagicMock()
+    mock_table.delete.return_value = mock_table
+    mock_table.eq.return_value = mock_table
+    mock_db = MagicMock()
+    mock_db.table.return_value = mock_table
+
+    with patch("src.logging_db._db", return_value=mock_db):
+        delete_feedback(user_id="user-1", query_id="q1", wine_id="w-1")
+
+    mock_db.table.assert_called_once_with("recommendation_feedback")
+    mock_table.delete.assert_called_once()
+    mock_table.eq.assert_has_calls([
+        call("user_id", "user-1"), call("query_id", "q1"), call("wine_id", "w-1"),
+    ])
+    mock_table.execute.assert_called_once()
+
+
+def test_delete_feedback_swallows_exceptions():
+    mock_db = MagicMock()
+    mock_db.table.side_effect = RuntimeError("db down")
+
+    with patch("src.logging_db._db", return_value=mock_db):
+        delete_feedback(user_id="user-1", query_id="q1", wine_id="w-1")  # must not raise
 
 
 def test_delete_all_feedback_deletes_by_user_id_only():

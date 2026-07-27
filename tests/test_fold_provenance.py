@@ -123,8 +123,10 @@ class _FakeFeedbackDB:
             self.rows[key] = dict(row)
             resp.data = [dict(row)]
         elif self._op == "delete":
-            uid, wid = self._filters.get("user_id"), self._filters.get("wine_id")
-            for k in [k for k in self.rows if k[0] == uid and k[2] == wid]:
+            uid = self._filters.get("user_id")
+            qid = self._filters.get("query_id")
+            wid = self._filters.get("wine_id")
+            for k in [k for k in self.rows if k[0] == uid and k[1] == qid and k[2] == wid]:
                 del self.rows[k]
             resp.data = []
         return resp

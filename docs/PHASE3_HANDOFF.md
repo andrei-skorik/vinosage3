@@ -861,6 +861,65 @@ model in the dropdown and confirm it DOES override, exactly as before.
 
 ---
 
+## Fix: toggling a rating off in one session wiped the wine's ratings from every other session
+
+**Found by the human** on the live admin panel: if a wine already had
+ratings from different sessions/turns (e.g. 👍 in turn 1, 👎 in turn 2 —
+same user, different `query_id`s, or different users entirely), clicking an
+EXISTING rating a second time (toggle-off, in any ONE of those sessions)
+made the wine vanish **entirely** from the admin "Per-wine feedback" table —
+as if it had never been rated at all — even though the other session's row
+was never touched and still exists in `recommendation_feedback`.
+
+**Root cause:** `src/logging_db.py::delete_feedback(*, user_id, wine_id)` —
+called on toggle-off — deleted **every** row matching `(user_id, wine_id)`,
+with no `query_id` filter, even though the table's own unique constraint is
+`(user_id, query_id, wine_id)` (sql/08) and the write path
+(`log_feedback`)/read path (`get_feedback_reason`) were already correctly
+scoped by all three. The function's own docstring even said so outright:
+"Delete all recommendation_feedback rows for this user + wine." This is the
+exact same class of bug as the cross-turn highlight leak fixed just before
+this (Python state keyed by wine_id alone instead of (query_id, wine_id)) —
+just one layer deeper, in the DB delete itself. `feedback_aggregates`
+(`src/feedback_insights.py`) was never the problem: it correctly aggregates
+whatever rows the query returns — the rows were just being over-deleted
+before it ever saw them.
+
+**Fix:** `delete_feedback` now takes `query_id` and scopes the delete to
+`.eq("user_id", ...).eq("query_id", ...).eq("wine_id", ...)` — exactly one
+row, exactly the turn being toggled off. `src/ui/chat_view.py::_toggle_feedback`
+updated to pass it through (it already had `query_id` as a parameter, used
+elsewhere in the same function). No changes needed in
+`feedback_insights.py` — once the delete stopped over-reaching, the
+existing pandas aggregation automatically does the right thing for all four
+of the human's stated requirements:
+1. 👍 → +1 UP in the admin table. (unchanged, already correct)
+2. 👎 → +1 DOWN. (unchanged, already correct)
+3. Flip (👍 then 👎) → −1 to the outgoing rating, +1 to the new one.
+   (unchanged, already correct — the flip branch was never wine_id-only)
+4. Same button clicked twice (toggle off) → the wine's count for that
+   rating decrements by 1, and the wine only disappears from the table if
+   BOTH its up AND down counts are now zero for every remaining row — which
+   falls out for free from `groupby` once the delete only removes the one
+   row it should have.
+
+**Tests:** `tests/test_logging_db.py` (+2) — `delete_feedback` issues the
+delete with all three `.eq()` filters; swallows exceptions. Two pre-existing
+tests updated to the new 3-argument call signature (they asserted the OLD,
+buggy 2-argument delete call): `tests/test_feedback_anonymous.py`,
+`tests/test_fold_provenance.py` (the latter's `_FakeFeedbackDB` delete
+simulation was ALSO silently reproducing the bug — a delete filtered by
+user_id + wine_id only — and is now scoped by query_id too, matching real
+Postgres behavior post-fix).
+
+**Verified:** full suite green, **319 passed** (was 317, +2 exactly).
+`git diff --stat`: `src/logging_db.py`, `src/ui/chat_view.py`,
+`tests/test_feedback_anonymous.py`, `tests/test_fold_provenance.py`,
+`tests/test_logging_db.py` — no `sql/` changes (this is a query-scoping fix,
+no schema change).
+
+---
+
 ## Step 4 — voice input via Whisper (`docs/phase3/step4_voice/`)
 
 **Status:** Done, pending human smoke test with a real mic + real API call.

@@ -150,17 +150,27 @@ def log_feedback(
         return False
 
 
-def delete_feedback(*, user_id: str, wine_id: str) -> None:
-    """Delete all recommendation_feedback rows for this user + wine.
+def delete_feedback(*, user_id: str, query_id: str, wine_id: str) -> None:
+    """Delete the ONE recommendation_feedback row for this
+    (user_id, query_id, wine_id) — the table's own unique constraint
+    (sql/08_feedback.sql).
 
     Called on toggle-off so that white buttons mean 'no opinion' in the DB
-    as well as in the UI.  Swallows all exceptions — a delete failure must
-    not break the chat path (SPEC §5.4 principle).
+    as well as in the UI. Scoped by query_id, not just user_id + wine_id:
+    the same user can independently rate the same wine across different
+    turns/sessions (exactly what the cross-turn highlight-leak fix was
+    about), so an unscoped delete here would silently wipe every OTHER
+    turn's rating for that wine too — the admin "Per-wine feedback" table
+    would then show the wine as if it never had any ratings at all, even
+    though other (query_id, wine) rows for it were never meant to be
+    touched by this toggle-off. Swallows all exceptions — a delete failure
+    must not break the chat path (SPEC §5.4 principle).
     """
     try:
         _db().table("recommendation_feedback") \
             .delete() \
             .eq("user_id", user_id) \
+            .eq("query_id", query_id) \
             .eq("wine_id", wine_id) \
             .execute()
     except Exception as exc:
